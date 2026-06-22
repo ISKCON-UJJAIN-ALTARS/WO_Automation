@@ -1,0 +1,60 @@
+{
+  "3dome_ceiling": {
+    "template_image": "templates/3dome_ceiling.png",
+    "input_mappings": {
+      "altar_length": "D1",
+      "altar_depth": "D2",
+      "pillar_width": "D3",
+      "pillar_height": "D4",
+      "arch_ratio": "D6"
+    },
+    "output_mappings": {
+      "TL":  "E1",
+      "TSH": "E2",
+      "OW":  "E3",
+      "INP": "E4",
+      "BSH": "E5",
+      "BSW": "E6",
+      "INW": "E7",
+      "INC": "E8",
+      "RBL": "E9",
+      "SL":  "E10",
+      "LP":  "E11",
+      "SW":  "E12",
+      "SH":  "E13",
+      "WP":  "E14",
+      "PH":  "E15",
+      "PL":  "E16"
+    },
+    "sheet_name": "3Dome"
+  },
+  "4dome_ceiling": {
+    "template_image": "templates/4dome_ceiling.png",
+    "input_mappings": {
+      "altar_length": "D1",
+      "altar_depth": "D2",
+      "pillar_width": "D3",
+      "pillar_height": "D4",
+      "arch_ratio": "D6"
+    },
+    "output_mappings": {
+      "TL":  "E1",
+      "TSH": "E2",
+      "OW":  "E3",
+      "INP": "E4",
+      "BSH": "E5",
+      "BSW": "E6",
+      "INW": "E7",
+      "INC": "E8",
+      "RBL": "E9",
+      "SL":  "E10",
+      "LP":  "E11",
+      "SW":  "E12",
+      "SH":  "E13",
+      "WP":  "E14",
+      "PH":  "E15",
+      "PL":  "E16"
+    },
+    "sheet_name": "4Dome"
+  }
+}
