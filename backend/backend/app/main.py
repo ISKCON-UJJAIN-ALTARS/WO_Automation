@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +16,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Divine Sky Work Order API started successfully.")
+    yield
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Divine Sky – Work Order Automation API",
@@ -23,6 +32,7 @@ app = FastAPI(
         "reads calculated outputs, and renders a dimensioned template image."
     ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ── Static files: serve generated images under /generated ────────────────────
@@ -38,8 +48,3 @@ app.include_router(templates_router, tags=["Work Orders"])
 @app.get("/", include_in_schema=False)
 def root():
     return {"message": "Divine Sky Work Order API is running. Visit /docs for the Swagger UI."}
-
-
-@app.on_event("startup")
-def on_startup():
-    logger.info("Divine Sky Work Order API started successfully.")
