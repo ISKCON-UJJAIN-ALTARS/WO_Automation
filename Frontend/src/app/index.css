@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: #0F172A;
+  color: #F8FAFC;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.blueprint-bg {
+  background-color: #0F172A;
+  background-image:
+    linear-gradient(rgba(212,175,55,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(212,175,55,0.07) 1px, transparent 1px);
+  background-size: 32px 32px;
+  position: relative;
+}
+
+.blueprint-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 0%, rgba(212,175,55,0.08), transparent 60%);
+  pointer-events: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+::-webkit-scrollbar-thumb {
+  background: #2A3B57;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D4AF37;
+}
+
+.dim-card {
+  background: #1E293B;
+  border: 1px solid #2A3B57;
+  border-radius: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.dim-card:focus-within,
+.dim-card:hover {
+  border-color: rgba(212,175,55,0.5);
+}
+
+.crosshair-corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(212,175,55,0.5);
+}
