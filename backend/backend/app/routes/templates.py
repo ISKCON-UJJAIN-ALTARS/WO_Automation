@@ -47,10 +47,11 @@ def generate_work_order(request: GenerateRequest):
 
     try:
         output_values = write_inputs_and_read_outputs(
-            inputs=request.inputs,
+            inputs=request.inputs.model_dump(),
             input_mappings=cfg["input_mappings"],
             output_mappings=cfg["output_mappings"],
-            sheet_name=cfg["sheet_name"],
+            input_sheet=cfg["input_sheet"],
+            output_sheet=cfg["output_sheet"],
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc))

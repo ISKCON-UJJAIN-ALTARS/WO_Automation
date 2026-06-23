@@ -1,10 +1,31 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any
+from typing import Dict, Any, Literal, Union, Annotated
 
 
-class GenerateRequest(BaseModel):
-    template: str = Field(..., description="Template key, e.g. '4dome_ceiling'")
-    inputs: Dict[str, float] = Field(..., description="Input dimension values keyed by field name")
+# ── Input schemas per altar type ──────────────────────────────────────────────
+
+class CeilingInputs(BaseModel):
+    altar_length: float
+    altar_depth:  float
+    pillar_width: float
+    pillar_height: float
+    arch_ratio:   float
+
+
+class BaseBoxInputs(BaseModel):
+    altar_length: float
+    altar_depth:  float
+    altar_height: float
+    shelf_count:  int
+    door_width:   float
+    # add whatever fields basebox actually needs
+
+
+# ── Discriminated request models ──────────────────────────────────────────────
+
+class CeilingRequest(BaseModel):
+    template: Literal["3dome_ceiling", "4dome_ceiling"]
+    inputs:   CeilingInputs
 
     model_config = {
         "json_schema_extra": {
@@ -24,7 +45,39 @@ class GenerateRequest(BaseModel):
     }
 
 
+class BaseBoxRequest(BaseModel):
+    template: Literal["basebox"]
+    inputs:   BaseBoxInputs
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "template": "basebox",
+                    "inputs": {
+                        "altar_length": 42,
+                        "altar_depth": 22,
+                        "altar_height": 18,
+                        "shelf_count": 2,
+                        "door_width": 12.5
+                    }
+                }
+            ]
+        }
+    }
+
+
+# ── Union type used in the router ─────────────────────────────────────────────
+
+GenerateRequest = Annotated[
+    Union[CeilingRequest, BaseBoxRequest],
+    Field(discriminator="template")
+]
+
+
+# ── Response (shared) ─────────────────────────────────────────────────────────
+
 class GenerateResponse(BaseModel):
-    success: bool
+    success:    bool
     image_path: str
-    values: Dict[str, Any]
+    values:     Dict[str, Any]

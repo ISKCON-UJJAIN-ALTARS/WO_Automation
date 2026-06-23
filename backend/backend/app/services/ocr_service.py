@@ -8,7 +8,7 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
-pytesseract.pytesseract.tesseract_cmd = r"D:\New folder\tesseract.exe" 
+pytesseract.pytesseract.tesseract_cmd = r"D:\New folder\tesseract.exe"
 logger = logging.getLogger(__name__)
 
 # Regex that matches tokens like {TL}, {TSH}, {OW} …
@@ -59,6 +59,9 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
         word = (data["text"][i] or "").strip()
         if not word:
             continue
+
+        # Log every raw OCR word at DEBUG level to help diagnose misreads
+        logger.debug("OCR raw word: '%s'", word)
 
         found = _PLACEHOLDER_RE.findall(word)
         for token in found:

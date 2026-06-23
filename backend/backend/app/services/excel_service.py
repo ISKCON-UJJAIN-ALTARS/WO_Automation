@@ -48,7 +48,8 @@ def write_inputs_and_read_outputs(
     inputs: Dict[str, float],
     input_mappings: Dict[str, str],
     output_mappings: Dict[str, str],
-    sheet_name: str,
+    input_sheet: str,
+    output_sheet: str,
 ) -> Dict[str, Any]:
     """
     Write input values into the Excel workbook using the cell mappings,
@@ -58,7 +59,8 @@ def write_inputs_and_read_outputs(
         inputs:          dict of field_name -> value supplied by the client
         input_mappings:  dict of field_name -> cell address (e.g. "D1")
         output_mappings: dict of label -> cell address (e.g. "TL" -> "E1")
-        sheet_name:      name of the worksheet to target
+        input_sheet:     name of the worksheet to write inputs into (shared across altar types)
+        output_sheet:    name of the worksheet to read outputs from (specific to each altar type)
 
     Returns:
         dict of label -> calculated value read from the workbook
@@ -70,12 +72,12 @@ def write_inputs_and_read_outputs(
     logger.info("Loading workbook for writing: %s", EXCEL_PATH)
     wb = load_workbook(EXCEL_PATH)
 
-    if sheet_name not in wb.sheetnames:
+    if input_sheet not in wb.sheetnames:
         raise ValueError(
-            f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}"
+            f"Input sheet '{input_sheet}' not found. Available: {wb.sheetnames}"
         )
 
-    ws = wb[sheet_name]
+    ws = wb[input_sheet]
     for field, cell_addr in input_mappings.items():
         value = inputs.get(field)
         if value is None:
@@ -91,9 +93,15 @@ def write_inputs_and_read_outputs(
     _recalculate_with_libreoffice(EXCEL_PATH)
 
     # ── Read outputs ──────────────────────────────────────────────────────────
-    logger.info("Reading outputs (data_only mode).")
+    logger.info("Reading outputs (data_only mode) from sheet: %s", output_sheet)
     wb_data = load_workbook(EXCEL_PATH, data_only=True)
-    ws_data = wb_data[sheet_name]
+
+    if output_sheet not in wb_data.sheetnames:
+        raise ValueError(
+            f"Output sheet '{output_sheet}' not found. Available: {wb_data.sheetnames}"
+        )
+
+    ws_data = wb_data[output_sheet]
 
     outputs: Dict[str, Any] = {}
     for label, cell_addr in output_mappings.items():

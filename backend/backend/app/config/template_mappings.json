@@ -26,7 +26,8 @@
       "PH":  "E15",
       "PL":  "E16"
     },
-    "sheet_name": "3Dome"
+    "input_sheet": "Input",
+    "output_sheet": "3Dome"
   },
   "4dome_ceiling": {
     "template_image": "templates/4dome_ceiling.png",
@@ -55,6 +56,7 @@
       "PH":  "E15",
       "PL":  "E16"
     },
-    "sheet_name": "4Dome"
+    "input_sheet": "Input",
+    "output_sheet": "4Dome"
   }
 }
