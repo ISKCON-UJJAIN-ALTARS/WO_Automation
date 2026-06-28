@@ -31,8 +31,17 @@ def _recalculate_with_libreoffice(path: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         cmd = [soffice, "--headless", "--convert-to", "xlsx",
                "--outdir", tmp_dir, str(path)]
-        logger.info("Recalculating workbook with LibreOffice …")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        logger.info("Recalculating workbook with LibreOffice … (cmd: %s)", " ".join(cmd))
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "LibreOffice did not finish within 60s. It may be waiting on "
+                "a stale user-profile lock. Check for orphaned 'soffice' "
+                "processes and a leftover .lock file in the LibreOffice user "
+                "profile directory."
+            )
+            raise
         if result.returncode != 0:
             logger.error("LibreOffice recalculation failed: %s", result.stderr)
             return
@@ -84,9 +93,30 @@ def write_inputs_and_read_outputs(
             logger.warning("Input '%s' not provided; skipping %s", field, cell_addr)
             continue
         ws[cell_addr] = value
-        logger.debug("  Wrote %s -> %s = %s", field, cell_addr, value)
+        logger.info("  Wrote %s -> %s = %s", field, cell_addr, value)
 
-    wb.save(EXCEL_PATH)
+    # ── Diagnostic: check the file isn't locked by another process before
+    #    attempting to save. On Windows, a file held open by Excel/OneDrive
+    #    will make wb.save() raise PermissionError rather than hang, but this
+    #    check surfaces the cause immediately and with a clear message.
+    try:
+        with open(EXCEL_PATH, "a+b"):
+            pass
+    except PermissionError as exc:
+        logger.error(
+            "Workbook appears to be locked by another process (e.g. open in "
+            "Excel, or syncing via OneDrive/Dropbox). Close it and retry. "
+            "Underlying error: %s",
+            exc,
+        )
+        raise
+
+    logger.info("About to call wb.save(%s) ...", EXCEL_PATH)
+    try:
+        wb.save(EXCEL_PATH)
+    except Exception:
+        logger.exception("wb.save() raised an exception")
+        raise
     logger.info("Workbook saved with inputs.")
 
     # ── Recalculate formulas via LibreOffice ──────────────────────────────────

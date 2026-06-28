@@ -20,7 +20,7 @@ with _CONFIG_PATH.open() as fh:
     _TEMPLATE_CONFIG: dict = json.load(fh)
 
 # Base directory of the project (backend/)
-_BASE_DIR = Path(__file__).resolve().parents[3]
+_BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 @router.post("/generate", response_model=GenerateResponse, summary="Generate work-order image")
