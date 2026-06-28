@@ -3,6 +3,12 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+# Load .env before anything else imports os.environ-based config
+# (sheets_service.py reads GOOGLE_SHEETS_* at import time).
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Divine Sky – Work Order Automation API",
     description=(
-        "Accepts altar dimensions, writes them into an Excel workbook, "
+        "Accepts altar dimensions, writes them into a Google Sheet, "
         "reads calculated outputs, and renders a dimensioned template image."
     ),
     version="1.0.0",

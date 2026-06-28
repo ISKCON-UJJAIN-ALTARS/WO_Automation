@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.schemas.request_models import GenerateRequest, GenerateResponse
-from app.services.excel_service import write_inputs_and_read_outputs
+from app.services.sheets_service import write_inputs_and_read_outputs
 from app.services.template_service import render_template
 
 logger = logging.getLogger(__name__)
