@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -42,10 +43,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS: allow the Vite dev frontend to call this API ────────────────────────
+# ── CORS: allow the configured frontend origin(s) to call this API ───────────
+# ALLOWED_ORIGINS is a comma-separated list, e.g.:
+#   "http://localhost:5173,https://your-project.vercel.app"
+# Defaults to just the local Vite dev server if unset.
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
+_allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+logger.info("CORS allowed origins: %s", _allowed_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://wo-automation.vercel.app/"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
