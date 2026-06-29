@@ -45,7 +45,7 @@ app = FastAPI(
 # ── CORS: allow the Vite dev frontend to call this API ────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://wo-automation.vercel.app/"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -14,9 +15,20 @@ from gspread.exceptions import (
 logger = logging.getLogger(__name__)
 
 # ── Configuration (from environment) ───────────────────────────────────────────
-# GOOGLE_SHEETS_CREDENTIALS_PATH: path to the service-account JSON key file.
-# GOOGLE_SHEETS_SPREADSHEET_ID:   the spreadsheet ID from the sheet's URL
-#                                 (the segment between /d/ and /edit).
+# Two ways to supply credentials, checked in this order:
+#
+# 1. GOOGLE_SHEETS_CREDENTIALS_JSON — the *entire contents* of the
+#    service-account JSON key file, pasted as a single environment variable
+#    value. This is the one to use on Render (and any host where you can't
+#    upload a file) since env vars are just strings.
+#
+# 2. GOOGLE_SHEETS_CREDENTIALS_PATH — a path to the JSON key file on disk.
+#    This is the one to use for local development, where the file simply
+#    lives in your project folder (and is git-ignored).
+#
+# GOOGLE_SHEETS_SPREADSHEET_ID: the spreadsheet ID from the sheet's URL
+#                                (the segment between /d/ and /edit).
+_CREDENTIALS_JSON = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_JSON")
 _CREDENTIALS_PATH = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
 _SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
 
@@ -27,26 +39,49 @@ _SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
 # formulas, mirroring how the old code waited on a LibreOffice subprocess.
 _RECALC_SETTLE_SECONDS = float(os.environ.get("GOOGLE_SHEETS_RECALC_DELAY", "1.5"))
 
-_client = None
+_client: "gspread.Client | None" = None
 
 
-def _get_client():
+def _get_client() -> gspread.Client:
     """
     Lazily create and cache the authenticated gspread client.
 
+    Tries GOOGLE_SHEETS_CREDENTIALS_JSON first (raw JSON string — used on
+    Render/production), then falls back to GOOGLE_SHEETS_CREDENTIALS_PATH
+    (a file on disk — used for local development).
+
     Raises:
-        FileNotFoundError: if GOOGLE_SHEETS_CREDENTIALS_PATH is unset or the
-                            file it points to does not exist.
-        GoogleAuthError:   if the credentials file is invalid/unauthorized.
+        FileNotFoundError: if neither credential source is configured, the
+                            JSON string is malformed, or the file path does
+                            not exist.
+        GoogleAuthError:   if the credentials are invalid/unauthorized.
     """
     global _client
     if _client is not None:
         return _client
 
+    if _CREDENTIALS_JSON:
+        try:
+            info = json.loads(_CREDENTIALS_JSON)
+        except json.JSONDecodeError as exc:
+            raise FileNotFoundError(
+                "GOOGLE_SHEETS_CREDENTIALS_JSON is set but is not valid JSON. "
+                "Make sure you pasted the entire contents of the service-"
+                f"account key file, with no extra quoting. Error: {exc}"
+            )
+        try:
+            _client = gspread.service_account_from_dict(info)
+        except GoogleAuthError:
+            logger.exception("Failed to authenticate with Google Sheets (from JSON env var)")
+            raise
+        return _client
+
     if not _CREDENTIALS_PATH:
         raise FileNotFoundError(
-            "GOOGLE_SHEETS_CREDENTIALS_PATH is not set. Add it to your .env "
-            "file, pointing at the service-account JSON key file."
+            "Neither GOOGLE_SHEETS_CREDENTIALS_JSON nor "
+            "GOOGLE_SHEETS_CREDENTIALS_PATH is set. Set one of them — the "
+            "JSON env var for production (e.g. Render), or the file path "
+            "for local development."
         )
     if not os.path.exists(_CREDENTIALS_PATH):
         raise FileNotFoundError(
