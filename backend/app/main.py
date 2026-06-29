@@ -64,3 +64,6 @@ app.include_router(templates_router, tags=["Work Orders"])
 @app.get("/", include_in_schema=False)
 def root():
     return {"message": "Divine Sky Work Order API is running. Visit /docs for the Swagger UI."}
+@app.get("/health/", include_in_schema=False)
+def health():
+    return {"message": "Divine Sky Work Order API is healthy."}
