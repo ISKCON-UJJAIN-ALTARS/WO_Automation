@@ -4,4 +4,3 @@ backend/.venv/
 backend/credentials/
 .env
 backend/services/__pycache__
-backend/generated
