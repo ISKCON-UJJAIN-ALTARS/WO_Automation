@@ -39,10 +39,10 @@ _SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
 # formulas, mirroring how the old code waited on a LibreOffice subprocess.
 _RECALC_SETTLE_SECONDS = float(os.environ.get("GOOGLE_SHEETS_RECALC_DELAY", "1.5"))
 
-_client: "gspread.Client | None" = None
+_client = None
 
 
-def _get_client() -> gspread.Client:
+def _get_client():
     """
     Lazily create and cache the authenticated gspread client.
 
