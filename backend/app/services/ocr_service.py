@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+import shutil
 from dataclasses import dataclass
 from typing import List
 
@@ -8,8 +10,22 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
-pytesseract.pytesseract.tesseract_cmd = r"D:\New folder\tesseract.exe"
 logger = logging.getLogger(__name__)
+
+# Locate the Tesseract binary. Checked in this order:
+# 1. TESSERACT_CMD env var — set this explicitly if auto-detection fails.
+# 2. shutil.which("tesseract") — finds it on PATH; this is what works on
+#    Render/Linux, where `apt-get install tesseract-ocr` puts it on PATH
+#    automatically.
+# 3. The hardcoded Windows path — last-resort fallback for local Windows
+#    dev machines where Tesseract was installed outside PATH.
+_TESSERACT_CMD = (
+    os.environ.get("TESSERACT_CMD")
+    or shutil.which("tesseract")
+    or r"D:\New folder\tesseract.exe"
+)
+pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
+logger.info("Using Tesseract binary at: %s", _TESSERACT_CMD)
 
 # Regex that matches tokens like {TL}, {TSH}, {OW} …
 _PLACEHOLDER_RE = re.compile(r"\{[A-Z][A-Z0-9_]*\}")

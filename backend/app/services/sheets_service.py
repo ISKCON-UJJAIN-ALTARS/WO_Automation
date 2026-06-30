@@ -12,20 +12,37 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Locate the Tesseract binary. Checked in this order:
-# 1. TESSERACT_CMD env var — set this explicitly if auto-detection fails.
-# 2. shutil.which("tesseract") — finds it on PATH; this is what works on
-#    Render/Linux, where `apt-get install tesseract-ocr` puts it on PATH
-#    automatically.
-# 3. The hardcoded Windows path — last-resort fallback for local Windows
-#    dev machines where Tesseract was installed outside PATH.
-_TESSERACT_CMD = (
-    os.environ.get("TESSERACT_CMD")
-    or shutil.which("tesseract")
-    or r"D:\New folder\tesseract.exe"
-)
-pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
-logger.info("Using Tesseract binary at: %s", _TESSERACT_CMD)
+# ── Configuration (from environment) ───────────────────────────────────────────
+# Two ways to supply credentials, checked in this order:
+#
+# 1. GOOGLE_SHEETS_CREDENTIALS_JSON — the *entire contents* of the
+#    service-account JSON key file, pasted as a single environment variable
+#    value. This is the one to use on Render (and any host where you can't
+#    upload a file) since env vars are just strings.
+#
+# 2. GOOGLE_SHEETS_CREDENTIALS_PATH — a path to the JSON key file on disk.
+#    This is the one to use for local development, where the file simply
+#    lives in your project folder (and is git-ignored).
+#
+# GOOGLE_SHEETS_SPREADSHEET_ID: the spreadsheet ID from the sheet's URL
+#                                (the segment between /d/ and /edit).
+_CREDENTIALS_JSON = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_JSON")
+_CREDENTIALS_PATH = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
+_SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
+
+# Recalculation in Google Sheets happens server-side the instant a cell is
+# written — there is no LibreOffice-style headless recalculation step here.
+# We still pause briefly after writing inputs before reading outputs, purely
+# to give Sheets' dependency graph a moment to settle for chained/volatile
+# formulas, mirroring how the old code waited on a LibreOffice subprocess.
+_RECALC_SETTLE_SECONDS = float(os.environ.get("GOOGLE_SHEETS_RECALC_DELAY", "1.5"))
+
+_client = None
+
+
+def _get_client():
+    """
+    Lazily create and cache the authenticated gspread client.
 
 # Regex that matches tokens like {TL}, {TSH}, {OW} …
 _PLACEHOLDER_RE = re.compile(r"\{[A-Z][A-Z0-9_]*\}")
