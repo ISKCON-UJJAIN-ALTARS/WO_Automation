@@ -746,7 +746,12 @@ footer {
 .a4-sheet {
   width: 210mm;
   max-width: 100%;
-  height: 297mm;
+  /* Slightly less than the full 297mm: leaves ~27mm of safety buffer so the
+     sheet still fits on one page even if the browser's own print header/
+     footer ("date/title" top, "url/page number" bottom) is left switched
+     on — that reserves margin space and overrides our @page margin:0,
+     shrinking the real printable area below the nominal 297mm. */
+  height: 270mm;
   margin: 0 auto;
   background: #fff;
   padding: 10mm;
