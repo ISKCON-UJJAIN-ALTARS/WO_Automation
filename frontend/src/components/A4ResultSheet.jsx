@@ -1,11 +1,23 @@
 import { downloadUrl, imageUrl } from "../api";
 
+// Must match .a4-sheet's own CSS: total height, internal padding, and the
+// gap between blocks. Kept in sync here so we can compute each block's
+// EXACT height in JS rather than relying on the layout engine to infer it
+// through several nested Grid/Flexbox layers — Chrome's print-to-PDF
+// pipeline is a separate, more limited rendering pass than normal on-screen
+// rendering, and it wasn't reliably resolving percentage/1fr heights
+// through that chain, letting the first image overflow its slot and get
+// clipped by overflow:hidden.
+const SHEET_HEIGHT_MM = 255;
+const SHEET_PADDING_MM = 10; // top + bottom, each side
+const BLOCK_GAP_MM = 6;
+
 /**
  * Lays out every successfully generated drawing (one per selected variant,
  * e.g. Ceiling + Base Box) onto a single, fixed-height A4 page — images
- * only, no values table. Each drawing gets an equal vertical slot and
- * scales down (preserving aspect ratio) to fit inside it, so N drawings
- * always share ONE page instead of spilling onto a second one.
+ * only, no values table. Each drawing gets an explicit, equal-height slot
+ * (computed here, not inferred by CSS) and scales down within it, so N
+ * drawings always share ONE page instead of spilling or getting clipped.
  *
  * `window.print()` + the `@media print` rules in index.css hide everything
  * else on screen, so "Print" effectively becomes "Save as PDF" in the
@@ -17,8 +29,11 @@ export default function A4ResultSheet({ apiBase, results }) {
 
   if (successful.length === 0) return null;
 
+  const n = successful.length;
+  const usableHeightMm = SHEET_HEIGHT_MM - SHEET_PADDING_MM * 2 - BLOCK_GAP_MM * Math.max(n - 1, 0);
+  const blockHeightMm = usableHeightMm / n;
+
   function handlePrintClick() {
-    console.log("[A4ResultSheet] Print button clicked, calling window.print()");
     try {
       window.print();
     } catch (err) {
@@ -29,12 +44,14 @@ export default function A4ResultSheet({ apiBase, results }) {
 
   return (
     <>
-      <div className="a4-actions">
+      {/* a4-no-print: this action bar must never appear on the printed
+          page/PDF itself, only on screen. */}
+      <div className="a4-actions a4-no-print">
         <button type="button" className="submit-btn" onClick={handlePrintClick}>
           Print / Save as PDF (A4)
         </button>
         <span className="a4-actions-hint">
-          {successful.length} drawing{successful.length > 1 ? "s" : ""} on one A4 page
+          {n} drawing{n > 1 ? "s" : ""} on one A4 page
           {failed.length > 0 ? ` · ${failed.length} failed (see above)` : ""}
         </span>
       </div>
@@ -43,9 +60,9 @@ export default function A4ResultSheet({ apiBase, results }) {
         {successful.map((r) => {
           const imgUrl = imageUrl(apiBase, r.data.image_path);
           return (
-            <div className="a4-block" key={r.templateKey}>
-              {/* Label shown on screen for reference only — not printed, so the
-                  A4 page contains only the drawings themselves. */}
+            <div className="a4-block" key={r.templateKey} style={{ height: `${blockHeightMm}mm` }}>
+              {/* Label shown on screen for reference only — not printed, so
+                  the A4 page contains only the drawings themselves. */}
               <div className="a4-block-title a4-no-print">{r.label}</div>
               <div className="a4-drawing-frame">
                 <img
