@@ -746,12 +746,12 @@ footer {
 .a4-sheet {
   width: 210mm;
   max-width: 100%;
-  /* Slightly less than the full 297mm: leaves ~27mm of safety buffer so the
-     sheet still fits on one page even if the browser's own print header/
-     footer ("date/title" top, "url/page number" bottom) is left switched
-     on — that reserves margin space and overrides our @page margin:0,
-     shrinking the real printable area below the nominal 297mm. */
-  height: 270mm;
+  /* Comfortably less than the full 297mm: leaves a wide safety buffer so
+     the sheet still fits on one page even if the browser's own print
+     header/footer ("date/title" top, "url/page number" bottom) is left
+     switched on — that reserves margin space and overrides our
+     @page margin:0, shrinking the real printable area below 297mm. */
+  height: 255mm;
   margin: 0 auto;
   background: #fff;
   padding: 10mm;
@@ -759,7 +759,7 @@ footer {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
   display: grid;
   /* grid-auto-rows: 1fr guarantees every block gets an EQUAL share of the
-     fixed 297mm height, regardless of any block's content size — unlike a
+     fixed height, regardless of any block's content size — unlike a
      chain of nested flex:1 items, where a flex item's default minimum size
      is based on its content, and the first image's intrinsic size could
      claim more than its fair share, squeezing later blocks out entirely
@@ -767,6 +767,15 @@ footer {
   grid-auto-rows: 1fr;
   gap: 6mm;
   overflow: hidden; /* never let content spill onto an implicit 2nd page */
+  /* overflow:hidden only clips CONTENT bigger than this box — it does NOT
+     stop the browser from physically slicing the box itself in half across
+     a page boundary if its top edge isn't sitting at exactly y=0 of the
+     page (which happens if e.g. the browser's header/footer nudges it
+     down). break-inside:avoid tells the print engine "never slice this —
+     push the whole thing onto a fresh page instead if it doesn't fully
+     fit," which is what actually prevents a half-shown drawing. */
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 .a4-block {
   display: grid;
@@ -774,6 +783,8 @@ footer {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 .a4-block-title {
   font-family: "Fraunces", serif;
