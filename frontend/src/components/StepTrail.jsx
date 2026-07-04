@@ -1,8 +1,8 @@
-/** Dimension-line styled progress indicator for the 3-step wizard. */
+/** Dimension-line styled progress indicator for the wizard. */
 export default function StepTrail({ step, categoryLabel, variantLabel }) {
   const steps = [
-    { n: 1, label: "Component", value: categoryLabel },
-    { n: 2, label: "Variant", value: variantLabel },
+    { n: 1, label: "Component(s)", value: categoryLabel },
+    { n: 2, label: "Variant(s)", value: variantLabel },
     { n: 3, label: "Dimensions", value: null },
   ];
 

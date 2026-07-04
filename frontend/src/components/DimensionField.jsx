@@ -1,9 +1,10 @@
 /** Signature input element: an arrowed dimension line instead of a boxed field. */
-export default function DimensionField({ field, value, error, onChange }) {
+export default function DimensionField({ field, value, error, onChange, hint }) {
   return (
     <div className={`dim-field ${error ? "error" : ""}`}>
       <div className="dim-label-row">
         <span className="dim-label">{field.label}</span>
+        {hint && <span className="dim-shared-badge">{hint}</span>}
         <span className="dim-unit">{field.unit}</span>
       </div>
       <div className="dim-line">
