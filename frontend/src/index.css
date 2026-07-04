@@ -797,25 +797,50 @@ footer {
 }
 
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #a4-print-sheet,
-  #a4-print-sheet * {
-    visibility: visible;
-  }
-  #a4-print-sheet {
-    position: absolute;
-    left: 0;
-    top: 0;
-    box-shadow: none;
+  /* Strip the screen layout's own spacing so nothing but the sheet itself
+     contributes height on the printed page. */
+  .wrap {
+    max-width: none;
+    padding: 0;
     margin: 0;
+  }
+  .grid-2col {
+    gap: 0;
+  }
+
+  /* Collapse everything except the A4 sheet to zero size (display:none
+     removes an element from layout entirely, unlike visibility:hidden,
+     which still reserves its box and was causing extra blank pages). */
+  header.top,
+  .api-base-row,
+  .step-trail,
+  footer,
+  .grid-2col > section.panel:first-child,
+  .panel-head {
+    display: none !important;
   }
   .a4-no-print {
     display: none !important;
   }
+  /* Strip the card chrome (border/background/padding) around the results
+     panel so only the sheet itself prints, not a bordered box around it. */
+  .panel {
+    border: none;
+    background: none;
+  }
+  .panel-body {
+    padding: 0;
+  }
+  .a4-sheet {
+    box-shadow: none;
+    margin: 0;
+  }
+
+  /* Zero page margin: the sheet's own 10mm padding *is* the visual margin.
+     A non-zero @page margin here would shrink the printable area below the
+     sheet's own 297mm height and push the overflow onto a second page. */
   @page {
     size: A4;
-    margin: 10mm;
+    margin: 0;
   }
 }
