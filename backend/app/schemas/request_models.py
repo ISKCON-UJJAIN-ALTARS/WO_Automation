@@ -46,14 +46,14 @@ class CeilingRequest(BaseModel):
 
 
 class BaseBoxRequest(BaseModel):
-    template: Literal["basebox"]
+    template: Literal["basebox_standard"]
     inputs:   BaseBoxInputs
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "template": "basebox",
+                    "template": "basebox_standard",
                     "inputs": {
                         "altar_length": 42,
                         "altar_depth": 22,

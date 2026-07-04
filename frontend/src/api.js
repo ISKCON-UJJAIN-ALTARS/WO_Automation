@@ -43,6 +43,29 @@ export async function generateDrawing(apiBase, templateKey, inputs) {
   return data;
 }
 
+/**
+ * Generate several drawings in one go (e.g. a Ceiling + a Base Box for the
+ * same work order). Calls POST /generate once per job, sequentially — the
+ * backend writes to a single shared Google Sheet, so sequential calls avoid
+ * two jobs racing to write/read the same cells at once.
+ *
+ * @param {string} apiBase
+ * @param {Array<{templateKey: string, inputs: Record<string, number>, label: string}>} jobs
+ * @returns {Promise<Array<{templateKey: string, label: string, success: boolean, data?: object, error?: Error}>>}
+ */
+export async function generateMultiple(apiBase, jobs) {
+  const results = [];
+  for (const job of jobs) {
+    try {
+      const data = await generateDrawing(apiBase, job.templateKey, job.inputs);
+      results.push({ ...job, success: true, data });
+    } catch (error) {
+      results.push({ ...job, success: false, error });
+    }
+  }
+  return results;
+}
+
 /** Builds the absolute URL for GET /generate/download?filename=... */
 export function downloadUrl(apiBase, filename) {
   return `${normalizeBase(apiBase)}/generate/download?filename=${encodeURIComponent(filename)}`;

@@ -1,64 +1,101 @@
 import { useState } from "react";
 
-import { CATEGORIES, VARIANTS, findCategory, findVariant } from "./templateConfig";
-import { generateDrawing } from "./api";
+import { CATEGORIES, VARIANTS, findCategory, mergeFields, buildVariantInputs } from "./templateConfig";
+import { generateMultiple } from "./api";
 import useApiHealth from "./hooks/useApiHealth";
 
 import StepTrail from "./components/StepTrail";
 import SelectCard from "./components/SelectCard";
 import BlueprintIcon from "./components/BlueprintIcon";
 import DimensionField from "./components/DimensionField";
-import ResultView from "./components/ResultView";
+import A4ResultSheet from "./components/A4ResultSheet";
 
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export default function App() {
-  const [step, setStep] = useState(1); // 1 = category, 2 = variant, 3 = form/result
-  const [categoryKey, setCategoryKey] = useState(null);
-  const [variantKey, setVariantKey] = useState(null);
+  const [step, setStep] = useState(1); // 1 = categories (multi), 2 = variant per category, 3 = form/result
 
+  // Step 1: which categories the user checked (order = selection order, so
+  // "choose Ceiling first, then Base Box" is preserved into step 2).
+  const [selectedCategoryKeys, setSelectedCategoryKeys] = useState([]);
+
+  // Step 2: one chosen variant per category key, e.g. { ceiling: {...}, basebox: {...} }
+  const [variantSelections, setVariantSelections] = useState({});
+  const [variantStepIndex, setVariantStepIndex] = useState(0);
+
+  // Step 3: shared values keyed by field name, common fields (e.g. altar_length)
+  // are entered once and reused for every selected variant that needs them.
   const [values, setValues] = useState({});
   const [errors, setErrors] = useState({});
 
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState(null); // { kind: 'error' | 'info', title, message }
-  const [result, setResult] = useState(null); // { image_path, values }
+  const [results, setResults] = useState(null); // array from generateMultiple, or null
 
   const { apiBase, setApiBase, status: apiStatus, checkApi } = useApiHealth(DEFAULT_API_BASE);
 
-  const category = findCategory(categoryKey);
-  const variant = findVariant(categoryKey, variantKey);
+  const chosenVariants = selectedCategoryKeys.map((k) => variantSelections[k]).filter(Boolean);
+  const mergedFields = chosenVariants.length ? mergeFields(chosenVariants) : [];
 
-  function chooseCategory(key) {
-    setCategoryKey(key);
-    setVariantKey(null);
+  const categoryLabel = selectedCategoryKeys.map((k) => findCategory(k)?.label).filter(Boolean).join(" + ");
+  const variantLabel = chosenVariants.map((v) => v.label).join(" + ");
+
+  const currentCategoryKey = selectedCategoryKeys[variantStepIndex];
+  const currentCategory = findCategory(currentCategoryKey);
+
+  // ── Step 1: multi-select categories ─────────────────────────────────────
+
+  function toggleCategory(key) {
+    setSelectedCategoryKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }
+
+  function proceedFromCategories() {
+    if (selectedCategoryKeys.length === 0) return;
+    setVariantSelections({});
+    setVariantStepIndex(0);
     setValues({});
     setErrors({});
     setBanner(null);
-    setResult(null);
+    setResults(null);
     setStep(2);
   }
 
-  function chooseVariant(v) {
-    setVariantKey(v.key);
+  // ── Step 2: pick a variant, one category at a time ──────────────────────
+
+  function chooseVariantForCurrent(v) {
+    setVariantSelections((prev) => ({ ...prev, [currentCategoryKey]: { ...v, categoryKey: currentCategoryKey } }));
     setValues({});
     setErrors({});
     setBanner(null);
-    setResult(null);
-    setStep(3);
+    setResults(null);
+    if (variantStepIndex + 1 < selectedCategoryKeys.length) {
+      setVariantStepIndex((i) => i + 1);
+    } else {
+      setStep(3);
+    }
   }
 
   function goBackTo(targetStep) {
     setBanner(null);
     if (targetStep <= 1) {
-      setCategoryKey(null);
-      setVariantKey(null);
-    } else if (targetStep <= 2) {
-      setVariantKey(null);
-      setResult(null);
+      setVariantSelections({});
+      setVariantStepIndex(0);
+      setResults(null);
+      setStep(1);
+    } else if (targetStep === 2) {
+      // Step back one variant choice at a time; if already at the first
+      // category's variant screen, fall through to step 1.
+      setResults(null);
+      if (variantStepIndex === 0) {
+        setStep(1);
+      } else {
+        setVariantStepIndex((i) => i - 1);
+        setStep(2);
+      }
     }
-    setStep(targetStep);
   }
+
+  // ── Step 3: merged dimension form ───────────────────────────────────────
 
   function handleFieldChange(key, raw) {
     setValues((prev) => ({ ...prev, [key]: raw }));
@@ -66,12 +103,11 @@ export default function App() {
   }
 
   function validate() {
-    if (!variant) return null;
     const nextErrors = {};
-    const inputs = {};
+    const numericValues = {};
     let ok = true;
 
-    variant.fields.forEach((f) => {
+    mergedFields.forEach((f) => {
       const raw = (values[f.key] ?? "").toString().trim();
       if (raw === "") {
         nextErrors[f.key] = "Required";
@@ -94,44 +130,54 @@ export default function App() {
         ok = false;
         return;
       }
-      inputs[f.key] = num;
+      numericValues[f.key] = num;
     });
 
     setErrors(nextErrors);
-    return ok ? inputs : null;
+    return ok ? numericValues : null;
   }
 
   async function handleSubmit() {
     setBanner(null);
 
-    if (!variant.wired) {
+    const unwired = chosenVariants.filter((v) => !v.wired);
+    const wired = chosenVariants.filter((v) => v.wired);
+
+    const numericValues = validate();
+    if (!numericValues) return;
+
+    if (unwired.length > 0) {
       setBanner({
         kind: "info",
-        title: "Not wired up yet",
-        message: `"${variant.key}" has a request schema on the backend but no entry in template_mappings.json and no matching Excel sheet. Submitting will return a 404 from /generate until that config is added — this form will work the moment it is.`,
+        title: "Some selections aren't wired up yet",
+        message: `${unwired
+          .map((v) => `"${v.key}"`)
+          .join(", ")} has a request schema but no template_mappings.json entry / sheet yet, so only the remaining selection${
+          wired.length > 1 ? "s" : ""
+        } will be generated.`,
       });
-      return;
     }
 
-    const inputs = validate();
-    if (!inputs) return;
+    if (wired.length === 0) return;
 
     setSubmitting(true);
     try {
-      const data = await generateDrawing(apiBase, variant.key, inputs);
-      setResult(data);
-    } catch (err) {
-      if (err.status) {
+      const jobs = wired.map((v) => ({
+        templateKey: v.key,
+        label: `${findCategory(v.categoryKey)?.label ?? ""} · ${v.label}`,
+        inputs: buildVariantInputs(v, numericValues),
+      }));
+      const outcomes = await generateMultiple(apiBase, jobs);
+      setResults(outcomes);
+
+      const failed = outcomes.filter((o) => !o.success);
+      if (failed.length > 0) {
         setBanner({
           kind: "error",
-          title: `Backend rejected the request (${err.status})`,
-          message: err.message,
-        });
-      } else {
-        setBanner({
-          kind: "error",
-          title: "Could not reach backend",
-          message: `${err.message}. Check that the API base points to a running server and that CORS is enabled there.`,
+          title: `${failed.length} of ${outcomes.length} drawing(s) failed to generate`,
+          message: failed
+            .map((f) => `${f.label}: ${f.error?.message || "unknown error"}`)
+            .join("  |  "),
         });
       }
     } finally {
@@ -168,13 +214,13 @@ export default function App() {
         <span className="api-status-text">{apiStatus.text}</span>
       </div>
 
-      <StepTrail step={step} categoryLabel={category?.label} variantLabel={variant?.label} />
+      <StepTrail step={step} categoryLabel={categoryLabel} variantLabel={variantLabel} />
 
       {step === 1 && (
         <section className="panel">
           <div className="panel-head">
             <h2>What are you cutting?</h2>
-            <span className="tag">Step 1 of 3</span>
+            <span className="tag">Step 1 of 3 · pick one or both</span>
           </div>
           <div className="panel-body">
             <div className="card-grid">
@@ -184,33 +230,56 @@ export default function App() {
                   icon={c.icon}
                   title={c.label}
                   subtitle={c.blurb}
-                  onClick={() => chooseCategory(c.key)}
+                  multi
+                  selected={selectedCategoryKeys.includes(c.key)}
+                  onClick={() => toggleCategory(c.key)}
                 />
               ))}
+            </div>
+            <div className="submit-row">
+              <button
+                className="submit-btn"
+                disabled={selectedCategoryKeys.length === 0}
+                onClick={proceedFromCategories}
+              >
+                Continue{selectedCategoryKeys.length > 0 ? ` with ${categoryLabel}` : ""}
+              </button>
             </div>
           </div>
         </section>
       )}
 
-      {step === 2 && category && (
+      {step === 2 && currentCategory && (
         <section className="panel">
           <div className="panel-head">
-            <h2>Choose a {category.label} variant</h2>
-            <span className="tag">Step 2 of 3</span>
+            <h2>Choose a {currentCategory.label} variant</h2>
+            <span className="tag">
+              Step 2 of 3 · {variantStepIndex + 1} of {selectedCategoryKeys.length}
+            </span>
           </div>
           <div className="panel-body">
-            <button className="back-link" onClick={() => goBackTo(1)}>
-              ← Back to component type
+            <button className="back-link" onClick={() => goBackTo(2)}>
+              ← Back
             </button>
+            {selectedCategoryKeys.length > 1 && (
+              <p className="a4-actions-hint">
+                Picking {currentCategory.label} now — you'll choose{" "}
+                {selectedCategoryKeys
+                  .slice(variantStepIndex + 1)
+                  .map((k) => findCategory(k)?.label)
+                  .join(" and ") || "nothing else"}{" "}
+                next.
+              </p>
+            )}
             <div className="card-grid">
-              {(VARIANTS[category.key] || []).map((v) => (
+              {(VARIANTS[currentCategory.key] || []).map((v) => (
                 <SelectCard
                   key={v.key}
                   icon={v.icon}
                   title={v.label}
                   subtitle={v.sub}
                   disabledNote={v.wired ? null : "No config yet"}
-                  onClick={() => chooseVariant(v)}
+                  onClick={() => chooseVariantForCurrent(v)}
                 />
               ))}
             </div>
@@ -218,27 +287,29 @@ export default function App() {
         </section>
       )}
 
-      {step === 3 && variant && (
+      {step === 3 && chosenVariants.length > 0 && (
         <div className="grid-2col">
           <section className="panel">
             <div className="panel-head">
               <h2>Altar Dimensions</h2>
-              <span className="tag">{variant.wired ? "Input · Sheet" : "No sheet mapped"}</span>
+              <span className="tag">{chosenVariants.some((v) => v.wired) ? "Input · Sheet" : "No sheet mapped"}</span>
             </div>
             <div className="panel-body">
               <button className="back-link" onClick={() => goBackTo(2)}>
                 ← Back to variant
               </button>
 
-              <div className="variant-summary">
-                <BlueprintIcon kind={variant.icon} size={40} />
-                <div>
-                  <div className="variant-summary-title">
-                    {category.label} · {variant.label}
+              {chosenVariants.map((v) => (
+                <div className="variant-summary" key={v.key}>
+                  <BlueprintIcon kind={v.icon} size={40} />
+                  <div>
+                    <div className="variant-summary-title">
+                      {findCategory(v.categoryKey)?.label} · {v.label}
+                    </div>
+                    <div className="variant-summary-sub">{v.sub}</div>
                   </div>
-                  <div className="variant-summary-sub">{variant.sub}</div>
                 </div>
-              </div>
+              ))}
 
               {banner && (
                 <div className={`banner ${banner.kind === "info" ? "info" : ""}`}>
@@ -248,13 +319,14 @@ export default function App() {
               )}
 
               <form onSubmit={(e) => e.preventDefault()}>
-                {variant.fields.map((f) => (
+                {mergedFields.map((f) => (
                   <DimensionField
                     key={f.key}
                     field={f}
                     value={values[f.key] ?? ""}
                     error={errors[f.key]}
                     onChange={handleFieldChange}
+                    hint={f.usedBy.length > 1 ? "shared" : null}
                   />
                 ))}
               </form>
@@ -266,7 +338,7 @@ export default function App() {
                       <span className="spinner" /> Generating…
                     </>
                   ) : (
-                    "Generate Drawing"
+                    `Generate Drawing${chosenVariants.length > 1 ? "s" : ""}`
                   )}
                 </button>
               </div>
@@ -275,31 +347,31 @@ export default function App() {
 
           <section className="panel">
             <div className="panel-head">
-              <h2>Generated Drawing</h2>
-              <span className="tag">{result ? "Generated" : submitting ? "Processing…" : "Awaiting input"}</span>
+              <h2>Generated Drawing{chosenVariants.length > 1 ? "s" : ""}</h2>
+              <span className="tag">{results ? "Generated" : submitting ? "Processing…" : "Awaiting input"}</span>
             </div>
             <div className="panel-body">
-              {!result && (
+              {!results && (
                 <div className="result-empty">
                   <svg width="64" height="64" viewBox="0 0 64 64" fill="none" aria-hidden="true">
                     <rect x="8" y="8" width="48" height="48" stroke="#8A8A80" strokeWidth="1.5" strokeDasharray="4 4" />
                     <path d="M20 32h24M32 20v24" stroke="#8A8A80" strokeWidth="1.5" />
                   </svg>
                   <p>
-                    Fill in the dimensions and generate to see the rendered cutting drawing, with every
-                    calculated value listed below it.
+                    Fill in the dimensions and generate to see every selected drawing rendered together on one
+                    A4-sized sheet, with each drawing's calculated values listed underneath it.
                   </p>
                 </div>
               )}
-              {result && <ResultView apiBase={apiBase} data={result} />}
+              {results && <A4ResultSheet apiBase={apiBase} results={results} />}
             </div>
           </section>
         </div>
       )}
 
       <footer>
-        <span>Excel remains the source of truth — Python performs zero calculations.</span>
-        <span>{variant ? `template: ${variant.key}` : "no template selected"}</span>
+        <span>Google Sheets remains the source of truth — Python performs zero calculations.</span>
+        <span>{chosenVariants.length ? `templates: ${chosenVariants.map((v) => v.key).join(", ")}` : "no template selected"}</span>
       </footer>
     </div>
   );

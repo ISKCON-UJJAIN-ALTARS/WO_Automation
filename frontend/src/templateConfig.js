@@ -63,7 +63,7 @@ export const VARIANTS = {
       key: "basebox_standard",
       label: "Standard",
       sub: "Base Box Cutting",
-      wired: false,
+      wired: true,
       icon: "box",
       fields: [
         { key: "altar_length", label: "Altar Length", unit: "in" },
@@ -83,4 +83,35 @@ export function findVariant(categoryKey, variantKey) {
 
 export function findCategory(categoryKey) {
   return CATEGORIES.find((c) => c.key === categoryKey) || null;
+}
+
+/**
+ * Merge the `fields` arrays of several chosen variants into one deduplicated
+ * list, keyed by field `key`. Fields that appear in more than one variant
+ * (e.g. "altar_length" in both a Ceiling and a Base Box variant) are asked
+ * only once on the combined form. Each merged field carries `usedBy`, the
+ * list of variant keys that need it, so the UI can label shared fields.
+ */
+export function mergeFields(variants) {
+  const map = new Map();
+  variants.forEach((variant) => {
+    variant.fields.forEach((f) => {
+      const existing = map.get(f.key);
+      if (existing) {
+        if (!existing.usedBy.includes(variant.key)) existing.usedBy.push(variant.key);
+      } else {
+        map.set(f.key, { ...f, usedBy: [variant.key] });
+      }
+    });
+  });
+  return Array.from(map.values());
+}
+
+/** Pull out just the fields a single variant needs from the shared/merged values object. */
+export function buildVariantInputs(variant, sharedValues) {
+  const inputs = {};
+  variant.fields.forEach((f) => {
+    inputs[f.key] = sharedValues[f.key];
+  });
+  return inputs;
 }
