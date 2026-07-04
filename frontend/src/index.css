@@ -746,36 +746,54 @@ footer {
 .a4-sheet {
   width: 210mm;
   max-width: 100%;
-  min-height: 297mm;
+  height: 297mm;
   margin: 0 auto;
   background: #fff;
-  padding: 12mm;
+  padding: 10mm;
   box-sizing: border-box;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
-  gap: 10mm;
+  gap: 6mm;
+  overflow: hidden; /* never let content spill onto an implicit 2nd page */
 }
 .a4-block {
-  break-inside: avoid;
-  page-break-inside: avoid;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .a4-block-title {
   font-family: "Fraunces", serif;
   font-weight: 600;
-  font-size: 15px;
-  margin-bottom: 6mm;
-  color: var(--ink);
-  border-bottom: 1px solid var(--paper-line);
-  padding-bottom: 4mm;
+  font-size: 13px;
+  margin-bottom: 4mm;
+  color: var(--ink-soft);
 }
 .a4-drawing-frame {
-  margin-bottom: 6mm;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 .a4-drawing-frame img {
-  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
   height: auto;
+  object-fit: contain;
   display: block;
+}
+.a4-below-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 @media print {
