@@ -757,14 +757,16 @@ footer {
   padding: 10mm;
   box-sizing: border-box;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
-  display: grid;
-  /* grid-auto-rows: 1fr guarantees every block gets an EQUAL share of the
-     fixed height, regardless of any block's content size — unlike a
-     chain of nested flex:1 items, where a flex item's default minimum size
-     is based on its content, and the first image's intrinsic size could
-     claim more than its fair share, squeezing later blocks out entirely
-     under overflow:hidden. */
-  grid-auto-rows: 1fr;
+  /* Plain flex-column, no grow/stretch: each .a4-block below carries an
+     explicit inline height computed in JS (A4ResultSheet.jsx). A CSS Grid
+     with grid-auto-rows:1fr would stretch every block to fill its track
+     via the default align-items:stretch, silently overriding that
+     explicit height — which is exactly the ambiguity that let Chrome's
+     print-to-PDF pipeline miscompute block heights and clip the first
+     image. Flex's default flex-grow:0 leaves each block at exactly its own
+     explicit height instead. */
+  display: flex;
+  flex-direction: column;
   gap: 6mm;
   overflow: hidden; /* never let content spill onto an implicit 2nd page */
   /* overflow:hidden only clips CONTENT bigger than this box — it does NOT
@@ -780,6 +782,8 @@ footer {
 .a4-block {
   display: grid;
   grid-template-rows: auto 1fr;
+  flex-shrink: 0;
+  flex-grow: 0;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
