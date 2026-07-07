@@ -46,7 +46,15 @@ class CeilingRequest(BaseModel):
 
 
 class BaseBoxRequest(BaseModel):
-    template: Literal["basebox_standard"]
+    template: Literal[
+        "top",
+        "back",
+        "bottom",
+        "step_0",
+        "step_1",
+        "step_2",
+        "step_3",
+    ]
     inputs:   BaseBoxInputs
 
     model_config = {

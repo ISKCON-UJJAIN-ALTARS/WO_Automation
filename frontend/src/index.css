@@ -746,48 +746,60 @@ footer {
 .a4-sheet {
   width: 210mm;
   max-width: 100%;
-  height: 297mm;
+  /* Comfortably less than the full 297mm: leaves a wide safety buffer so
+     the sheet still fits on one page even if the browser's own print
+     header/footer ("date/title" top, "url/page number" bottom) is left
+     switched on — that reserves margin space and overrides our
+     @page margin:0, shrinking the real printable area below 297mm. */
+  height: 255mm;
   margin: 0 auto;
   background: #fff;
   padding: 10mm;
   box-sizing: border-box;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
-  gap: 6mm;
+  /* position:relative + absolutely-positioned .a4-item children: every
+     item's { left, top, width, height } is computed in JS by the masonry
+     packing algorithm (A4ResultSheet.jsx) as explicit mm numbers. This
+     sidesteps CSS Grid/Flexbox entirely for placement — the safest option
+     given Chrome's print-to-PDF pipeline wasn't reliably resolving
+     percentage/1fr sizes through nested auto-layout. */
+  position: relative;
   overflow: hidden; /* never let content spill onto an implicit 2nd page */
+  /* overflow:hidden only clips CONTENT bigger than this box — it does NOT
+     stop the browser from physically slicing the box itself in half across
+     a page boundary if its top edge isn't sitting at exactly y=0 of the
+     page (which happens if e.g. the browser's header/footer nudges it
+     down). break-inside:avoid tells the print engine "never slice this —
+     push the whole thing onto a fresh page instead if it doesn't fully
+     fit," which is what actually prevents a half-shown drawing. */
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
-.a4-block {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.a4-block-title {
-  font-family: "Fraunces", serif;
-  font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 4mm;
-  color: var(--ink-soft);
-}
-.a4-drawing-frame {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
+.a4-item {
+  position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
-.a4-drawing-frame img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+.a4-item img {
+  /* Each item's box was already sized in JS to exactly match this image's
+     own aspect ratio at that size, so it should fill it exactly with no
+     letterboxing — object-fit:contain is just a safety net for rounding. */
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
+}
+.a4-legend {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 0 0 18px;
+  padding-left: 20px;
+  line-height: 1.7;
 }
 .a4-below-actions {
   display: flex;
@@ -797,25 +809,50 @@ footer {
 }
 
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #a4-print-sheet,
-  #a4-print-sheet * {
-    visibility: visible;
-  }
-  #a4-print-sheet {
-    position: absolute;
-    left: 0;
-    top: 0;
-    box-shadow: none;
+  /* Strip the screen layout's own spacing so nothing but the sheet itself
+     contributes height on the printed page. */
+  .wrap {
+    max-width: none;
+    padding: 0;
     margin: 0;
+  }
+  .grid-2col {
+    gap: 0;
+  }
+
+  /* Collapse everything except the A4 sheet to zero size (display:none
+     removes an element from layout entirely, unlike visibility:hidden,
+     which still reserves its box and was causing extra blank pages). */
+  header.top,
+  .api-base-row,
+  .step-trail,
+  footer,
+  .grid-2col > section.panel:first-child,
+  .panel-head {
+    display: none !important;
   }
   .a4-no-print {
     display: none !important;
   }
+  /* Strip the card chrome (border/background/padding) around the results
+     panel so only the sheet itself prints, not a bordered box around it. */
+  .panel {
+    border: none;
+    background: none;
+  }
+  .panel-body {
+    padding: 0;
+  }
+  .a4-sheet {
+    box-shadow: none;
+    margin: 0;
+  }
+
+  /* Zero page margin: the sheet's own 10mm padding *is* the visual margin.
+     A non-zero @page margin here would shrink the printable area below the
+     sheet's own 297mm height and push the overflow onto a second page. */
   @page {
     size: A4;
-    margin: 10mm;
+    margin: 0;
   }
 }

@@ -13,13 +13,14 @@ import A4ResultSheet from "./components/A4ResultSheet";
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export default function App() {
-  const [step, setStep] = useState(1); // 1 = categories (multi), 2 = variant per category, 3 = form/result
+  const [step, setStep] = useState(1); // 1 = categories (multi), 2 = components per category (multi), 3 = form/result
 
   // Step 1: which categories the user checked (order = selection order, so
-  // "choose Ceiling first, then Base Box" is preserved into step 2).
+  // "configure Ceiling first, then Base Box" is preserved into step 2).
   const [selectedCategoryKeys, setSelectedCategoryKeys] = useState([]);
 
-  // Step 2: one chosen variant per category key, e.g. { ceiling: {...}, basebox: {...} }
+  // Step 2: one or more chosen variants ("components") PER category, e.g.
+  // { ceiling: [<3dome obj>], basebox: [<back_side obj>, <bottom_side obj>] }
   const [variantSelections, setVariantSelections] = useState({});
   const [variantStepIndex, setVariantStepIndex] = useState(0);
 
@@ -34,7 +35,9 @@ export default function App() {
 
   const { apiBase, setApiBase, status: apiStatus, checkApi } = useApiHealth(DEFAULT_API_BASE);
 
-  const chosenVariants = selectedCategoryKeys.map((k) => variantSelections[k]).filter(Boolean);
+  // Flatten every chosen component across every selected category, in
+  // selection order, e.g. [3dome_ceiling, back_side, bottom_side].
+  const chosenVariants = selectedCategoryKeys.flatMap((k) => variantSelections[k] || []);
   const mergedFields = chosenVariants.length ? mergeFields(chosenVariants) : [];
 
   const categoryLabel = selectedCategoryKeys.map((k) => findCategory(k)?.label).filter(Boolean).join(" + ");
@@ -42,6 +45,7 @@ export default function App() {
 
   const currentCategoryKey = selectedCategoryKeys[variantStepIndex];
   const currentCategory = findCategory(currentCategoryKey);
+  const currentCategorySelections = (currentCategoryKey && variantSelections[currentCategoryKey]) || [];
 
   // ── Step 1: multi-select categories ─────────────────────────────────────
 
@@ -60,14 +64,25 @@ export default function App() {
     setStep(2);
   }
 
-  // ── Step 2: pick a variant, one category at a time ──────────────────────
+  // ── Step 2: pick one or more components, one category at a time ─────────
 
-  function chooseVariantForCurrent(v) {
-    setVariantSelections((prev) => ({ ...prev, [currentCategoryKey]: { ...v, categoryKey: currentCategoryKey } }));
+  function toggleVariantForCurrent(v) {
+    setVariantSelections((prev) => {
+      const existing = prev[currentCategoryKey] || [];
+      const already = existing.some((sel) => sel.key === v.key);
+      const next = already
+        ? existing.filter((sel) => sel.key !== v.key)
+        : [...existing, { ...v, categoryKey: currentCategoryKey }];
+      return { ...prev, [currentCategoryKey]: next };
+    });
     setValues({});
     setErrors({});
     setBanner(null);
     setResults(null);
+  }
+
+  function proceedFromVariants() {
+    if (currentCategorySelections.length === 0) return;
     if (variantStepIndex + 1 < selectedCategoryKeys.length) {
       setVariantStepIndex((i) => i + 1);
     } else {
@@ -83,8 +98,9 @@ export default function App() {
       setResults(null);
       setStep(1);
     } else if (targetStep === 2) {
-      // Step back one variant choice at a time; if already at the first
-      // category's variant screen, fall through to step 1.
+      // Step back one category at a time; if already at the first
+      // category's component screen, fall through to step 1. Selections
+      // already made are kept, so nothing needs re-picking.
       setResults(null);
       if (variantStepIndex === 0) {
         setStep(1);
@@ -252,7 +268,7 @@ export default function App() {
       {step === 2 && currentCategory && (
         <section className="panel">
           <div className="panel-head">
-            <h2>Choose a {currentCategory.label} variant</h2>
+            <h2>Choose {currentCategory.label} component(s)</h2>
             <span className="tag">
               Step 2 of 3 · {variantStepIndex + 1} of {selectedCategoryKeys.length}
             </span>
@@ -263,7 +279,7 @@ export default function App() {
             </button>
             {selectedCategoryKeys.length > 1 && (
               <p className="a4-actions-hint">
-                Picking {currentCategory.label} now — you'll choose{" "}
+                Configuring {currentCategory.label} now — you'll configure{" "}
                 {selectedCategoryKeys
                   .slice(variantStepIndex + 1)
                   .map((k) => findCategory(k)?.label)
@@ -279,9 +295,23 @@ export default function App() {
                   title={v.label}
                   subtitle={v.sub}
                   disabledNote={v.wired ? null : "No config yet"}
-                  onClick={() => chooseVariantForCurrent(v)}
+                  multi
+                  selected={currentCategorySelections.some((sel) => sel.key === v.key)}
+                  onClick={() => toggleVariantForCurrent(v)}
                 />
               ))}
+            </div>
+            <div className="submit-row">
+              <button
+                className="submit-btn"
+                disabled={currentCategorySelections.length === 0}
+                onClick={proceedFromVariants}
+              >
+                Continue
+                {currentCategorySelections.length > 0
+                  ? ` with ${currentCategorySelections.map((v) => v.label).join(" + ")}`
+                  : ""}
+              </button>
             </div>
           </div>
         </section>
@@ -296,7 +326,7 @@ export default function App() {
             </div>
             <div className="panel-body">
               <button className="back-link" onClick={() => goBackTo(2)}>
-                ← Back to variant
+                ← Back to components
               </button>
 
               {chosenVariants.map((v) => (
@@ -359,7 +389,7 @@ export default function App() {
                   </svg>
                   <p>
                     Fill in the dimensions and generate to see every selected drawing rendered together on one
-                    A4-sized sheet, with each drawing's calculated values listed underneath it.
+                    A4-sized sheet.
                   </p>
                 </div>
               )}
