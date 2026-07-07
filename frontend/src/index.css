@@ -757,17 +757,13 @@ footer {
   padding: 10mm;
   box-sizing: border-box;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
-  /* Plain flex-column, no grow/stretch: each .a4-block below carries an
-     explicit inline height computed in JS (A4ResultSheet.jsx). A CSS Grid
-     with grid-auto-rows:1fr would stretch every block to fill its track
-     via the default align-items:stretch, silently overriding that
-     explicit height — which is exactly the ambiguity that let Chrome's
-     print-to-PDF pipeline miscompute block heights and clip the first
-     image. Flex's default flex-grow:0 leaves each block at exactly its own
-     explicit height instead. */
-  display: flex;
-  flex-direction: column;
-  gap: 6mm;
+  /* position:relative + absolutely-positioned .a4-item children: every
+     item's { left, top, width, height } is computed in JS by the masonry
+     packing algorithm (A4ResultSheet.jsx) as explicit mm numbers. This
+     sidesteps CSS Grid/Flexbox entirely for placement — the safest option
+     given Chrome's print-to-PDF pipeline wasn't reliably resolving
+     percentage/1fr sizes through nested auto-layout. */
+  position: relative;
   overflow: hidden; /* never let content spill onto an implicit 2nd page */
   /* overflow:hidden only clips CONTENT bigger than this box — it does NOT
      stop the browser from physically slicing the box itself in half across
@@ -779,44 +775,33 @@ footer {
   break-inside: avoid;
   page-break-inside: avoid;
 }
-.a4-block {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  flex-shrink: 0;
-  flex-grow: 0;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  break-inside: avoid;
-  page-break-inside: avoid;
-}
-.a4-block-title {
-  font-family: "Fraunces", serif;
-  font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 4mm;
-  color: var(--ink-soft);
-  text-align: center;
-}
-.a4-drawing-frame {
-  min-height: 0;
-  min-width: 0;
-  width: 100%;
-  height: 100%;
+.a4-item {
+  position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
-.a4-drawing-frame img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+.a4-item img {
+  /* Each item's box was already sized in JS to exactly match this image's
+     own aspect ratio at that size, so it should fill it exactly with no
+     letterboxing — object-fit:contain is just a safety net for rounding. */
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
   min-width: 0;
   min-height: 0;
+}
+.a4-legend {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 0 0 18px;
+  padding-left: 20px;
+  line-height: 1.7;
 }
 .a4-below-actions {
   display: flex;
