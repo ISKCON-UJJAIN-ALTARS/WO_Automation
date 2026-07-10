@@ -51,14 +51,14 @@
     "output_mappings": { "L": "AH7", "H": "AE4" }
   },
   "step_0": {
-    "template_image": "templates/step_0.png",
+    "template_image": "templates/step0.png",
     "input_group": "basebox",
     "input_fields": ["box_length", "box_height", "level_count", "box_design", "level_1D"],
     "output_sheet": "WO_Automation",
     "output_mappings": { "L": "E8", "H": "E9" }
   },
   "step_1": {
-    "template_image": "templates/step_1.png",
+    "template_image": "templates/step1.png",
     "input_group": "basebox",
     "input_fields": [
       "box_length", "box_height", "level_count", "box_design",
@@ -70,9 +70,10 @@
     }
   },
   "step_2": {
-    "template_image": "templates/step_2.png",
+    "template_image": "templates/step2.png",
     "input_group": "basebox",
-    "input_fields": ["altar_length", "pillar_width", "pillar_height", "arch_ratio"],
+    "input_fields": [ "box_length", "box_height", "level_count", "box_design",
+      "level_1D", "level_2H", "level_2D"],
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "L": "AJ30", "H": "AK20", "L1": "AI19", "H1": "AM26",
@@ -80,9 +81,10 @@
     }
   },
   "step_3": {
-    "template_image": "templates/step_3.png",
+    "template_image": "templates/step3.png",
     "input_group": "basebox",
-    "input_fields": ["altar_length", "altar_depth", "arch_ratio"],
+    "input_fields": [ "box_length", "box_height", "level_count", "box_design",
+      "level_1D", "level_2H", "level_2D","level_3H", "level_3D" ],
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "L": "E8", "H": "E9", "L1": "E10", "H1": "E11", "L2": "E12", "H2": "E13",

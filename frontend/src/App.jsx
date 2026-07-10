@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { CATEGORIES, VARIANTS, findCategory, mergeFields, buildVariantInputs } from "./templateConfig";
+import { CATEGORIES, findCategory, mergeFields, buildVariantInputs, loadVariantsFromBackend } from "./templateConfig";
 import { generateMultiple } from "./api";
 import useApiHealth from "./hooks/useApiHealth";
 
@@ -14,6 +14,12 @@ const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000
 
 export default function App() {
   const [step, setStep] = useState(1); // 1 = categories (multi), 2 = components per category (multi), 3 = form/result
+
+  // Live template/variant/field data, fetched from GET /templates rather
+  // than hardcoded — see templateConfig.js's loadVariantsFromBackend().
+  // Shape: { [categoryKey]: [ { key, label, sub, icon, wired, fields }, ... ] }
+  const [variants, setVariants] = useState({});
+  const [variantsLoadError, setVariantsLoadError] = useState(null);
 
   // Step 1: which categories the user checked (order = selection order, so
   // "configure Ceiling first, then Base Box" is preserved into step 2).
@@ -34,6 +40,24 @@ export default function App() {
   const [results, setResults] = useState(null); // array from generateMultiple, or null
 
   const { apiBase, setApiBase, status: apiStatus, checkApi } = useApiHealth(DEFAULT_API_BASE);
+
+  // Load real template/field data from the backend once on mount. If the
+  // API base is changed later, checkApi (on blur) verifies reachability,
+  // but the initial variant load happens once here against the starting base.
+  useEffect(() => {
+    let cancelled = false;
+    loadVariantsFromBackend(apiBase)
+      .then((v) => {
+        if (!cancelled) setVariants(v);
+      })
+      .catch((err) => {
+        if (!cancelled) setVariantsLoadError(err.message || "Failed to load templates");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Flatten every chosen component across every selected category, in
   // selection order, e.g. [3dome_ceiling, back_side, bottom_side].
@@ -120,7 +144,7 @@ export default function App() {
 
   function validate() {
     const nextErrors = {};
-    const numericValues = {};
+    const finalValues = {};
     let ok = true;
 
     mergedFields.forEach((f) => {
@@ -130,37 +154,50 @@ export default function App() {
         ok = false;
         return;
       }
-      const num = Number(raw);
-      if (Number.isNaN(num)) {
-        nextErrors[f.key] = "Must be a number";
-        ok = false;
-        return;
+
+      // Only "number" fields get numeric coercion/validation. "text" fields
+      // (e.g. box_design) and "select" fields (e.g. level_count, arch_ratio
+      // options) pass through as their raw string value — running Number()
+      // on something like "standard" would always fail as NaN even though
+      // it's a perfectly valid value for that field.
+      if (f.type === "number" || f.type === undefined) {
+        const num = Number(raw);
+        if (Number.isNaN(num)) {
+          nextErrors[f.key] = "Must be a number";
+          ok = false;
+          return;
+        }
+        if (f.integer && !Number.isInteger(num)) {
+          nextErrors[f.key] = "Must be a whole number";
+          ok = false;
+          return;
+        }
+        if (num <= 0) {
+          nextErrors[f.key] = "Must be greater than 0";
+          ok = false;
+          return;
+        }
+        finalValues[f.key] = num;
+      } else {
+        finalValues[f.key] = raw;
       }
-      if (f.integer && !Number.isInteger(num)) {
-        nextErrors[f.key] = "Must be a whole number";
-        ok = false;
-        return;
-      }
-      if (num <= 0) {
-        nextErrors[f.key] = "Must be greater than 0";
-        ok = false;
-        return;
-      }
-      numericValues[f.key] = num;
     });
 
     setErrors(nextErrors);
-    return ok ? numericValues : null;
+    return ok ? finalValues : null;
   }
 
   async function handleSubmit() {
     setBanner(null);
 
+    // Every variant returned by GET /templates already has a real backend
+    // config entry (that's what the endpoint lists), so `wired` is always
+    // true here now. Kept the split for safety in case that ever changes.
     const unwired = chosenVariants.filter((v) => !v.wired);
     const wired = chosenVariants.filter((v) => v.wired);
 
-    const numericValues = validate();
-    if (!numericValues) return;
+    const finalValues = validate();
+    if (!finalValues) return;
 
     if (unwired.length > 0) {
       setBanner({
@@ -168,7 +205,7 @@ export default function App() {
         title: "Some selections aren't wired up yet",
         message: `${unwired
           .map((v) => `"${v.key}"`)
-          .join(", ")} has a request schema but no template_mappings.json entry / sheet yet, so only the remaining selection${
+          .join(", ")} has no matching backend config yet, so only the remaining selection${
           wired.length > 1 ? "s" : ""
         } will be generated.`,
       });
@@ -181,7 +218,7 @@ export default function App() {
       const jobs = wired.map((v) => ({
         templateKey: v.key,
         label: `${findCategory(v.categoryKey)?.label ?? ""} · ${v.label}`,
-        inputs: buildVariantInputs(v, numericValues),
+        inputs: buildVariantInputs(v, finalValues),
       }));
       const outcomes = await generateMultiple(apiBase, jobs);
       setResults(outcomes);
@@ -229,6 +266,13 @@ export default function App() {
         />
         <span className="api-status-text">{apiStatus.text}</span>
       </div>
+
+      {variantsLoadError && (
+        <div className="banner">
+          <strong>Couldn't load templates from the backend</strong>
+          {variantsLoadError} — check the API base above and that the server is running.
+        </div>
+      )}
 
       <StepTrail step={step} categoryLabel={categoryLabel} variantLabel={variantLabel} />
 
@@ -288,7 +332,7 @@ export default function App() {
               </p>
             )}
             <div className="card-grid">
-              {(VARIANTS[currentCategory.key] || []).map((v) => (
+              {(variants[currentCategory.key] || []).map((v) => (
                 <SelectCard
                   key={v.key}
                   icon={v.icon}
@@ -300,6 +344,9 @@ export default function App() {
                   onClick={() => toggleVariantForCurrent(v)}
                 />
               ))}
+              {!variantsLoadError && (variants[currentCategory.key] || []).length === 0 && (
+                <p className="a4-actions-hint">Loading components…</p>
+              )}
             </div>
             <div className="submit-row">
               <button
