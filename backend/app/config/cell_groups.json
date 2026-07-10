@@ -1,0 +1,32 @@
+
+
+{
+  "altar": {
+    "sheet": "WO_Automation",
+    "cells": {
+      "altar_length": "D1",
+      "altar_depth": "D2",
+      "pillar_width": "D3",
+      "pillar_height": "D4",
+      "arch_ratio": "D6"
+    }
+  },
+  "basebox": {
+    "sheet": "WO_Automation",
+    "cells": {
+      "box_length": "B1",
+      "box_height": "B2",
+      "level_count": "B3",
+      "box_design": "B4",
+      "level_1D": "B5",
+      "level_1H": "B6",
+      "level_2D": "B7",
+      "level_2H": "B8",
+      "level_3D": "B9",
+      "level_3H": "B10",
+      "level_4D": "B11",
+      "level_4H": "B12",
+      "level_5D": "B13"
+    }
+  }
+}

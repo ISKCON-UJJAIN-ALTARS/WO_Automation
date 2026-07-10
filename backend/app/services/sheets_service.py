@@ -15,47 +15,16 @@ from gspread.exceptions import (
 logger = logging.getLogger(__name__)
 
 # ── Configuration (from environment) ───────────────────────────────────────────
-# Two ways to supply credentials, checked in this order:
-#
-# 1. GOOGLE_SHEETS_CREDENTIALS_JSON — the *entire contents* of the
-#    service-account JSON key file, pasted as a single environment variable
-#    value. This is the one to use on Render (and any host where you can't
-#    upload a file) since env vars are just strings.
-#
-# 2. GOOGLE_SHEETS_CREDENTIALS_PATH — a path to the JSON key file on disk.
-#    This is the one to use for local development, where the file simply
-#    lives in your project folder (and is git-ignored).
-#
-# GOOGLE_SHEETS_SPREADSHEET_ID: the spreadsheet ID from the sheet's URL
-#                                (the segment between /d/ and /edit).
 _CREDENTIALS_JSON = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_JSON")
 _CREDENTIALS_PATH = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
 _SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
 
-# Recalculation in Google Sheets happens server-side the instant a cell is
-# written — there is no LibreOffice-style headless recalculation step here.
-# We still pause briefly after writing inputs before reading outputs, purely
-# to give Sheets' dependency graph a moment to settle for chained/volatile
-# formulas, mirroring how the old code waited on a LibreOffice subprocess.
 _RECALC_SETTLE_SECONDS = float(os.environ.get("GOOGLE_SHEETS_RECALC_DELAY", "1.5"))
 
 _client = None
 
 
 def _get_client():
-    """
-    Lazily create and cache the authenticated gspread client.
-
-    Tries GOOGLE_SHEETS_CREDENTIALS_JSON first (raw JSON string — used on
-    Render/production), then falls back to GOOGLE_SHEETS_CREDENTIALS_PATH
-    (a file on disk — used for local development).
-
-    Raises:
-        FileNotFoundError: if neither credential source is configured, the
-                            JSON string is malformed, or the file path does
-                            not exist.
-        GoogleAuthError:   if the credentials are invalid/unauthorized.
-    """
     global _client
     if _client is not None:
         return _client
@@ -99,14 +68,6 @@ def _get_client():
 
 
 def _get_spreadsheet():
-    """
-    Open the configured spreadsheet by ID.
-
-    Raises:
-        FileNotFoundError: if GOOGLE_SHEETS_SPREADSHEET_ID is unset.
-        SpreadsheetNotFound: if the ID is wrong or the sheet isn't shared
-                             with the service account's email.
-    """
     if not _SPREADSHEET_ID:
         raise FileNotFoundError(
             "GOOGLE_SHEETS_SPREADSHEET_ID is not set. Add it to your .env "
@@ -138,24 +99,11 @@ def write_inputs_and_read_outputs(
     Sheets a moment to recalculate formulas, then read back the calculated
     outputs.
 
-    This has the same signature and behaviour contract as the Excel-based
-    write_inputs_and_read_outputs() it replaces, so callers (routes/templates.py)
-    do not need to change.
-
-    Args:
-        inputs:          dict of field_name -> value supplied by the client
-        input_mappings:  dict of field_name -> cell address (e.g. "D1")
-        output_mappings: dict of label -> cell address (e.g. "TL" -> "E8")
-        input_sheet:     name of the worksheet (tab) to write inputs into
-        output_sheet:    name of the worksheet (tab) to read outputs from
-
-    Returns:
-        dict of label -> calculated value read from the sheet
-
-    Raises:
-        FileNotFoundError: missing credentials/spreadsheet configuration
-        ValueError:        the named worksheet tab does not exist
-        Exception:         any other Google API error (auth, quota, network)
+    Output mappings with a blank/empty cell address (e.g. a template config
+    entry like {"RBL": ""} for a value not yet wired up) are skipped rather
+    than sent to the Sheets API — an empty range would otherwise cause
+    batch_get() to fail for the ENTIRE template, not just that one field.
+    Skipped labels are still included in the returned dict, with value None.
     """
     spreadsheet = _get_spreadsheet()
 
@@ -169,10 +117,6 @@ def write_inputs_and_read_outputs(
             f"Input sheet '{input_sheet}' not found. Available: {available}"
         )
 
-    # Batch every input write into a single API call instead of one call per
-    # cell. This is both faster and avoids Google Sheets API rate limits,
-    # which is a real concern this design didn't have to worry about when
-    # writes were just in-memory openpyxl cell assignments.
     batch_data = []
     for field, cell_addr in input_mappings.items():
         value = inputs.get(field)
@@ -194,9 +138,6 @@ def write_inputs_and_read_outputs(
         logger.info("Inputs written successfully.")
 
     # ── Let formulas settle ────────────────────────────────────────────────────
-    # Google Sheets recalculates synchronously on write for most formulas, but
-    # a short pause avoids reading stale values for chained/volatile formulas
-    # immediately after a batch write.
     if _RECALC_SETTLE_SECONDS > 0:
         time.sleep(_RECALC_SETTLE_SECONDS)
 
@@ -210,25 +151,36 @@ def write_inputs_and_read_outputs(
             f"Output sheet '{output_sheet}' not found. Available: {available}"
         )
 
-    output_cells = list(output_mappings.values())
-    logger.info("Reading %d output cell(s) from '%s' ...", len(output_cells), output_sheet)
-    try:
-        # batch_get returns a list of value-ranges, one per requested range,
-        # each itself a list-of-rows-of-cells (so [[value]] for a single cell).
-        results = ws_output.batch_get(output_cells)
-    except APIError:
-        logger.exception("Google Sheets API error while reading outputs")
-        raise
+    # Filter out any mapping with no cell address before hitting the API —
+    # a single blank range in the batch would otherwise fail the whole read.
+    valid_output_mappings = {k: v for k, v in output_mappings.items() if v}
+    skipped_labels = set(output_mappings) - set(valid_output_mappings)
+    if skipped_labels:
+        logger.warning(
+            "Skipping output(s) with no cell mapping configured: %s",
+            sorted(skipped_labels),
+        )
 
-    outputs: Dict[str, Any] = {}
-    for (label, cell_addr), result in zip(output_mappings.items(), results):
-        raw = result[0][0] if result and result[0] else None
-        # Sheets API returns everything as strings; coerce to a number when
-        # possible so downstream rendering (e.g. float formatting) still works
-        # the same way it did when openpyxl handed back native numeric types.
-        value = _coerce_numeric(raw)
-        outputs[label] = value
-        logger.debug("  Read %s <- %s = %s", label, cell_addr, value)
+    outputs: Dict[str, Any] = {label: None for label in skipped_labels}
+
+    output_cells = list(valid_output_mappings.values())
+    if output_cells:
+        logger.info("Reading %d output cell(s) from '%s' ...", len(output_cells), output_sheet)
+        try:
+            # batch_get returns a list of value-ranges, one per requested range,
+            # each itself a list-of-rows-of-cells (so [[value]] for a single cell).
+            results = ws_output.batch_get(output_cells)
+        except APIError:
+            logger.exception("Google Sheets API error while reading outputs")
+            raise
+
+        for (label, cell_addr), result in zip(valid_output_mappings.items(), results):
+            raw = result[0][0] if result and result[0] else None
+            value = _coerce_numeric(raw)
+            outputs[label] = value
+            logger.debug("  Read %s <- %s = %s", label, cell_addr, value)
+    else:
+        logger.warning("No valid output cells to read — all mappings were blank.")
 
     logger.info("Outputs read: %s", outputs)
     return outputs
@@ -242,8 +194,6 @@ def _coerce_numeric(raw: Any) -> Any:
         return raw
     try:
         as_float = float(raw)
-        # Preserve whole numbers as ints for cleaner display, matching the
-        # kind of values openpyxl would have returned for integer cells.
         return int(as_float) if as_float.is_integer() else as_float
     except (TypeError, ValueError):
         return raw

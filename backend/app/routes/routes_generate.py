@@ -1,10 +1,10 @@
-import json
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from app.config.template_config import load_template_config
 from app.schemas.request_models import GenerateRequest, GenerateResponse
 from app.services.sheets_service import write_inputs_and_read_outputs
 from app.services.template_service import render_template
@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ── Load mappings config once at import time ──────────────────────────────────
-_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "template_mappings.json"
-
-with _CONFIG_PATH.open() as fh:
-    _TEMPLATE_CONFIG: dict = json.load(fh)
+# ── Load resolved config once at import time ───────────────────────────────
+# load_template_config() reads cell_groups.json + field_catalog.json +
+# templates.json and reconstructs the same flat shape the rest of this file
+# already expects (input_mappings/output_mappings/input_sheet/output_sheet),
+# plus an extra "input_fields" list used below for per-template validation.
+_TEMPLATE_CONFIG: dict = load_template_config()
 
 # Base directory of the project (backend/)
 _BASE_DIR = Path(__file__).resolve().parents[2]
@@ -26,13 +27,13 @@ _BASE_DIR = Path(__file__).resolve().parents[2]
 @router.post("/generate", response_model=GenerateResponse, summary="Generate work-order image")
 def generate_work_order(request: GenerateRequest):
     """
-    Accepts altar dimensions, writes them into Excel, reads calculated outputs,
-    detects placeholders in the template image, replaces them with real values,
-    and returns the path of the generated PNG.
+    Accepts altar/basebox dimensions, writes them into the sheet, reads
+    calculated outputs, detects placeholders in the template image, replaces
+    them with real values, and returns the path of the generated PNG.
     """
     template_key = request.template
 
-    # ── Validate template key ─────────────────────────────────────────────────
+    # ── Validate template key ─────────────────────────────────────────────
     if template_key not in _TEMPLATE_CONFIG:
         available = list(_TEMPLATE_CONFIG.keys())
         raise HTTPException(
@@ -42,12 +43,26 @@ def generate_work_order(request: GenerateRequest):
 
     cfg = _TEMPLATE_CONFIG[template_key]
 
-    # ── Step 1: Write inputs → read outputs via Excel ─────────────────────────
-    logger.info("Processing template '%s' with inputs: %s", template_key, request.inputs)
+    # ── Validate required inputs for this specific template ───────────────
+    # Different templates need different subsets of their group's fields
+    # (e.g. 'back_side' only needs 3 basebox fields, 'bottom' needs 9), so
+    # required-ness is checked per-template against cfg["input_fields"]
+    # rather than via one rigid Pydantic model per group.
+    provided = request.inputs.as_dict()
+    required_keys = {f["key"] for f in cfg["input_fields"]}
+    missing = required_keys - provided.keys()
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required inputs for '{template_key}': {sorted(missing)}",
+        )
+
+    # ── Step 1: Write inputs → read outputs via Sheets ─────────────────────
+    logger.info("Processing template '%s' with inputs: %s", template_key, provided)
 
     try:
         output_values = write_inputs_and_read_outputs(
-            inputs=request.inputs.model_dump(),
+            inputs=provided,
             input_mappings=cfg["input_mappings"],
             output_mappings=cfg["output_mappings"],
             input_sheet=cfg["input_sheet"],
@@ -58,12 +73,12 @@ def generate_work_order(request: GenerateRequest):
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
-        logger.exception("Unexpected error in Excel service")
-        raise HTTPException(status_code=500, detail=f"Excel processing error: {exc}")
+        logger.exception("Unexpected error in sheets service")
+        raise HTTPException(status_code=500, detail=f"Sheets processing error: {exc}")
 
-    logger.info("Excel outputs: %s", output_values)
+    logger.info("Outputs: %s", output_values)
 
-    # ── Step 2: Render template image ─────────────────────────────────────────
+    # ── Step 2: Render template image ──────────────────────────────────────
     template_rel_path = cfg["template_image"]           # e.g. "templates/4dome_ceiling.png"
     template_abs_path = _BASE_DIR / template_rel_path
 
@@ -108,5 +123,11 @@ def download_generated_image(filename: str):
 
 @router.get("/templates", summary="List available templates")
 def list_templates():
-    """Returns all template keys currently registered in the config."""
-    return {"templates": list(_TEMPLATE_CONFIG.keys())}
+    """Returns all templates with their image and input field metadata for form rendering."""
+    return {
+        name: {
+            "template_image": cfg["template_image"],
+            "input_fields": cfg["input_fields"],
+        }
+        for name, cfg in _TEMPLATE_CONFIG.items()
+    }

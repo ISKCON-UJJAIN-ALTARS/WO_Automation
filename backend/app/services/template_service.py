@@ -16,7 +16,7 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Font settings ─────────────────────────────────────────────────────────────
 _FONT       = cv2.FONT_HERSHEY_SIMPLEX
-_FONT_SCALE = 2
+_FONT_SCALE =1.5
 _FONT_THICK = 3
 _TEXT_COLOR = (0, 0, 0)   # black
 

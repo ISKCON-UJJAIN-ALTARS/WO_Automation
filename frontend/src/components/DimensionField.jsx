@@ -11,8 +11,8 @@ export default function DimensionField({ field, value, error, onChange, hint }) 
         <span className="dim-track" />
         <input
           className="dim-input"
-          type="number"
-          inputMode="decimal"
+          type={"number" || "char"} 
+          inputMode={"decimal" || "text"} 
           step={field.integer ? "1" : "any"}
           placeholder={field.integer ? "0" : "0.0"}
           value={value}
