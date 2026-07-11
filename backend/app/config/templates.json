@@ -6,7 +6,7 @@
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "TW": "T36", "TL": "S39", "VH": "S45", "BL": "V54",
-      "UW": "V36", "LW": "X36", "BW": "E16"
+      "UW": "V36", "LW": "X36", "BW": "U35"
     }
   },
   "4dome_ceiling": {
@@ -62,7 +62,7 @@
     "input_group": "basebox",
     "input_fields": [
       "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_1H", "level_2D"
+      "level_1D", "level_2H", "level_2D"
     ],
     "output_sheet": "WO_Automation",
     "output_mappings": {
@@ -73,7 +73,7 @@
     "template_image": "templates/step2.png",
     "input_group": "basebox",
     "input_fields": [ "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_2H", "level_2D"],
+      "level_1D", "level_2H", "level_2D","level_3H", "level_3D"],
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "L": "AJ30", "H": "AK20", "L1": "AI19", "H1": "AM26",
@@ -84,7 +84,7 @@
     "template_image": "templates/step3.png",
     "input_group": "basebox",
     "input_fields": [ "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_2H", "level_2D","level_3H", "level_3D" ],
+      "level_1D", "level_2H", "level_2D","level_3H", "level_3D","level_4H", "level_4D" ],
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "L": "E8", "H": "E9", "L1": "E10", "H1": "E11", "L2": "E12", "H2": "E13",

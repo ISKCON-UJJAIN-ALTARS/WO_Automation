@@ -16,9 +16,12 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Font settings ─────────────────────────────────────────────────────────────
 _FONT       = cv2.FONT_HERSHEY_SIMPLEX
-_FONT_SCALE =1.5
-_FONT_THICK = 3
-_TEXT_COLOR = (0, 0, 0)   # black
+_FONT_SCALE = 0.8
+_FONT_THICK = 2
+# No hardcoded _TEXT_COLOR anymore — each placeholder's replacement text is
+# rendered in that same placeholder's own original color (match.color),
+# sampled during OCR detection, so e.g. a green {H} label's replacement
+# value is also drawn in that same green rather than always black.
 
 
 def _sample_background_color(
@@ -74,7 +77,8 @@ def _cover_and_write(
 ) -> None:
     """
     1. Cover the placeholder bounding box with the surrounding background colour.
-    2. Draw *display_text* centred inside the same box.
+    2. Draw *display_text* centred inside the same box, in that same
+       placeholder's own original color (match.color).
 
     Mutates *image* in-place.
     """
@@ -85,41 +89,28 @@ def _cover_and_write(
 
     # Centre the text
     (tw, th), baseline = cv2.getTextSize(display_text, _FONT, _FONT_SCALE, _FONT_THICK)
-    tx = x + max(0, (w - tw) // 2)
-    ty = y + max(th, (h + th) // 2)
+    cx = x + w // 2
+    ty = y + (h + th) // 2
 
+    tx = cx - tw // 2
+    
     cv2.putText(
         image,
         display_text,
         (tx, ty),
         _FONT,
         _FONT_SCALE,
-        _TEXT_COLOR,
+        match.color,
         _FONT_THICK,
         lineType=cv2.LINE_AA,
     )
     logger.debug(
-        "Replaced %s with '%s' at (%d,%d)", match.token, display_text, x, y
+        "Replaced %s with '%s' at (%d,%d) in color(BGR)=%s", match.token, display_text, x, y, match.color
     )
 
 
 def render_template(template_path: str | Path, values: Dict[str, Any]) -> Path:
-    """
-    Detect all ``{KEY}`` placeholders inside the template image at
-    *template_path*, replace each with the matching value from *values*,
-    and save the result to the ``generated/`` directory.
-
-    Args:
-        template_path: absolute or relative path to the source PNG
-        values:        dict of key -> numeric/string value (e.g. {"TL": 12.75})
-
-    Returns:
-        Path of the saved output image.
-
-    Raises:
-        FileNotFoundError: if the template image does not exist
-        ValueError:        if the image cannot be decoded by OpenCV
-    """
+   
     template_path = Path(template_path)
     if not template_path.exists():
         raise FileNotFoundError(f"Template image not found: {template_path}")
