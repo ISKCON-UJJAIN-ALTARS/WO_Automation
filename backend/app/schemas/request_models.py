@@ -1,31 +1,36 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Dict, Any, Literal, Union, Annotated
 
 
-# ── Input schemas per altar type ──────────────────────────────────────────────
+# ── Loose input container — real validation happens against the resolved config ──
 
-class CeilingInputs(BaseModel):
-    altar_length: float
-    altar_depth:  float
-    pillar_width: float
-    pillar_height: float
-    arch_ratio:   float
+class TemplateInputs(BaseModel):
+    """Accepts any float/int/str fields; router validates required keys against
+    the resolved template config (input_fields) before writing to Excel."""
+    model_config = {"extra": "allow"}
 
-
-class BaseBoxInputs(BaseModel):
-    altar_length: float
-    altar_depth:  float
-    altar_height: float
-    shelf_count:  int
-    door_width:   float
-    # add whatever fields basebox actually needs
+    def as_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
 
 
-# ── Discriminated request models ──────────────────────────────────────────────
+# ── Single request model — template drives which fields are required ─────────
 
-class CeilingRequest(BaseModel):
-    template: Literal["3dome_ceiling", "4dome_ceiling"]
-    inputs:   CeilingInputs
+ALL_TEMPLATE_KEYS = Literal[
+    "3dome_ceiling",
+    "4dome_ceiling",
+    "top",
+    "back_side",
+    "bottom",
+    "step_0",
+    "step_1",
+    "step_2",
+    "step_3",
+]
+
+
+class GenerateRequest(BaseModel):
+    template: ALL_TEMPLATE_KEYS
+    inputs: TemplateInputs
 
     model_config = {
         "json_schema_extra": {
@@ -37,55 +42,29 @@ class CeilingRequest(BaseModel):
                         "altar_depth": 22,
                         "pillar_width": 3.5,
                         "pillar_height": 25,
-                        "arch_ratio": 1.588
-                    }
-                }
-            ]
-        }
-    }
-
-
-class BaseBoxRequest(BaseModel):
-    template: Literal[
-        "top",
-        "back",
-        "bottom",
-        "step_0",
-        "step_1",
-        "step_2",
-        "step_3",
-    ]
-    inputs:   BaseBoxInputs
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
+                        "arch_ratio": 1.588,
+                    },
+                },
                 {
-                    "template": "basebox_standard",
+                    "template": "bottom",
                     "inputs": {
-                        "altar_length": 42,
-                        "altar_depth": 22,
-                        "altar_height": 18,
-                        "shelf_count": 2,
-                        "door_width": 12.5
-                    }
-                }
+                        "box_length": 42,
+                        "box_height": 18,
+                        "level_count": 3,
+                        "box_design": "standard",
+                        "level_1D": 12,
+                        "level_2D": 10,
+                        "level_3D": 8,
+                    },
+                },
             ]
         }
     }
 
 
-# ── Union type used in the router ─────────────────────────────────────────────
-
-GenerateRequest = Annotated[
-    Union[CeilingRequest, BaseBoxRequest],
-    Field(discriminator="template")
-]
-
-
-# ── Response (shared) ─────────────────────────────────────────────────────────
+# ── Response (unchanged) ──────────────────────────────────────────────────────
 
 class GenerateResponse(BaseModel):
-    success:    bool
+    success: bool
     image_path: str
-    values:     Dict[str, Any]
+    values: Dict[str, Any]

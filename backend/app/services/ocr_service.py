@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -12,13 +12,6 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Locate the Tesseract binary. Checked in this order:
-# 1. TESSERACT_CMD env var — set this explicitly if auto-detection fails.
-# 2. shutil.which("tesseract") — finds it on PATH; this is what works on
-#    Render/Linux, where `apt-get install tesseract-ocr` puts it on PATH
-#    automatically.
-# 3. The hardcoded Windows path — last-resort fallback for local Windows
-#    dev machines where Tesseract was installed outside PATH.
 _TESSERACT_CMD = (
     os.environ.get("TESSERACT_CMD")
     or shutil.which("tesseract")
@@ -27,106 +20,305 @@ _TESSERACT_CMD = (
 pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
 logger.info("Using Tesseract binary at: %s", _TESSERACT_CMD)
 
-# Regex that matches tokens like {TL}, {TSH}, {OW} …
-_PLACEHOLDER_RE = re.compile(r"\{[A-Z][A-Z0-9_]*\}")
+
+_PLACEHOLDER_RE = re.compile(r"\{([A-Z0-9_]+)\}")
+_CHAR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}_"
+
+_SAT_THRESHOLD = 50
+_VAL_MIN = 30
+
+_OPEN_KERNEL_SIZE = 2
+_MIN_COMPONENT_AREA = 2
+_MAX_COMPONENT_FRACTION = 0.15
+_MAX_ASPECT_RATIO = 8.0
+
+# Upscale factor applied to each isolated placeholder crop before OCR.
+_OCR_SCALE = 3
+
+# Two components are considered part of the SAME placeholder token only if
+# they are close together AND similar in color. This is what keeps
+# neighbouring-but-different labels (e.g. a green {H3} next to a purple
+# {L3}) from being fused into one OCR read.
+_COLOR_DIST_THRESHOLD = 55.0   # Euclidean distance in BGR space
+_GAP_HEIGHT_MULTIPLIER = 1.6   # max horizontal gap, in units of avg comp height
+_VERTICAL_ALIGN_FRACTION = 0.8  # max centroid y-difference, in units of avg comp height
+
+_CANVAS_PAD = 4
 
 
 @dataclass
 class PlaceholderMatch:
-    token: str          # e.g. "{TL}"
-    key: str            # e.g. "TL"
-    x: int
+    token: str
+    key: str
+    x: int       # coordinates in the ORIGINAL (unscaled) image
     y: int
     w: int
     h: int
+    color: Tuple[int, int, int]
 
 
-def _isolate_label_text(image: np.ndarray) -> np.ndarray:
-    """
-    Strip out everything except the red placeholder-label text, replacing it
-    with pure black-on-white. This is necessary because the cyan/orange
-    dimension-line art in these drawings sits close enough to some labels
-    (e.g. the second {TL} next to the {VH} dimension line) that Tesseract's
-    text segmentation merges the line art and the glyphs into a single
-    unreadable blob, silently dropping that placeholder from detection.
+def _colored_mask(image: np.ndarray) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    return (s > _SAT_THRESHOLD) & (v > _VAL_MIN)
 
-    Placeholder labels in these templates are consistently rendered in a
-    saturated red (BGR roughly (49, 49, 255)), distinct from the cyan/orange
-    dimension lines and the black outline. Isolating by color is far more
-    robust than trying to tune OCR page-segmentation parameters, and keeps
-    the "no hardcoded coordinates" design intact since it works on any
-    template that follows the same red-label convention.
 
-    Args:
-        image: BGR numpy array (as returned by cv2.imread)
+def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, List[dict]]:
+    """Find individual glyph-ish blobs, filter noise, and report each kept
+    component's own bbox + color. Returns (labels, keep_mask, components)."""
+    mask = _colored_mask(image).astype(np.uint8) * 255
+    kernel = np.ones((_OPEN_KERNEL_SIZE, _OPEN_KERNEL_SIZE), np.uint8)
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    img_h, img_w = mask.shape[:2]
 
-    Returns:
-        A new BGR image, white background, with only the red text rendered
-        as solid black. The original image passed in is not modified —
-        rendering still happens against the original color image.
-    """
-    b, g, r = cv2.split(image)
-    # A pixel counts as "label text" if the red channel clearly dominates
-    # over both blue and green — this isolates red glyphs from cyan
-    # (high blue+green) and black/gray outline (all channels roughly equal).
-    red_mask = (r.astype(int) - cv2.max(b, g).astype(int)) > 40
+    keep_ids: List[int] = []
+    for label_id in range(1, num_labels):
+        x, y, w, h, area = stats[label_id]
+        if area < _MIN_COMPONENT_AREA:
+            continue
+        if w > _MAX_COMPONENT_FRACTION * img_w or h > _MAX_COMPONENT_FRACTION * img_h:
+            continue
+        aspect = max(w, h) / max(min(w, h), 1)
+        if aspect > _MAX_ASPECT_RATIO:
+            continue
+        keep_ids.append(label_id)
 
-    isolated = np.full_like(image, 255)
-    isolated[red_mask] = (0, 0, 0)
-    return isolated
+    keep_mask = np.isin(labels, keep_ids) if keep_ids else np.zeros(mask.shape, dtype=bool)
+
+    components: List[dict] = []
+    for label_id in keep_ids:
+        x, y, w, h, area = stats[label_id]
+        comp_mask = labels == label_id
+        pixels = image[comp_mask]
+        color = tuple(int(v) for v in np.median(pixels.reshape(-1, 3), axis=0)) if pixels.size else (0, 0, 0)
+        components.append({
+            "label_id": label_id, "x": int(x), "y": int(y),
+            "w": int(w), "h": int(h), "area": int(area), "color": color,
+        })
+
+    return labels, keep_mask, components
+
+
+class _UnionFind:
+    def __init__(self, n: int):
+        self.parent = list(range(n))
+
+    def find(self, i: int) -> int:
+        while self.parent[i] != i:
+            self.parent[i] = self.parent[self.parent[i]]
+            i = self.parent[i]
+        return i
+
+    def union(self, a: int, b: int) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[ra] = rb
+
+
+def _cluster_components(components: List[dict]) -> List[List[dict]]:
+    """Group components into probable single-placeholder clusters using
+    spatial proximity + color similarity, so that visually distinct
+    placeholders never get merged even if they sit close together."""
+    n = len(components)
+    uf = _UnionFind(n)
+    for i in range(n):
+        a = components[i]
+        for j in range(i + 1, n):
+            b = components[j]
+            avg_h = (a["h"] + b["h"]) / 2.0
+            if avg_h <= 0:
+                continue
+
+            a_cy = a["y"] + a["h"] / 2.0
+            b_cy = b["y"] + b["h"] / 2.0
+            if abs(a_cy - b_cy) > avg_h * _VERTICAL_ALIGN_FRACTION:
+                continue
+
+            if a["x"] <= b["x"]:
+                gap = b["x"] - (a["x"] + a["w"])
+            else:
+                gap = a["x"] - (b["x"] + b["w"])
+            if gap > avg_h * _GAP_HEIGHT_MULTIPLIER:
+                continue
+
+            ca, cb = np.array(a["color"], dtype=float), np.array(b["color"], dtype=float)
+            if np.linalg.norm(ca - cb) > _COLOR_DIST_THRESHOLD:
+                continue
+
+            uf.union(i, j)
+
+    groups: Dict[int, List[dict]] = {}
+    for i in range(n):
+        groups.setdefault(uf.find(i), []).append(components[i])
+    return list(groups.values())
+
+
+def _cluster_bbox(cluster: List[dict]) -> Tuple[int, int, int, int]:
+    xs = [c["x"] for c in cluster]
+    ys = [c["y"] for c in cluster]
+    x2s = [c["x"] + c["w"] for c in cluster]
+    y2s = [c["y"] + c["h"] for c in cluster]
+    x0, y0 = min(xs), min(ys)
+    return x0, y0, max(x2s) - x0, max(y2s) - y0
+
+
+def _cluster_color(cluster: List[dict]) -> Tuple[int, int, int]:
+    colors = np.array([c["color"] for c in cluster], dtype=float)
+    median = np.median(colors, axis=0).astype(int)
+    return tuple(int(v) for v in median)
+
+
+def _render_cluster_canvas(
+    labels: np.ndarray, cluster: List[dict], pad: int = _CANVAS_PAD
+) -> Tuple[Image.Image, int, int]:
+    """Paint ONLY this cluster's own pixels black on an isolated white
+    canvas, so OCR can never see a neighbouring placeholder's glyphs."""
+    H, W = labels.shape[:2]
+    x0, y0, w, h = _cluster_bbox(cluster)
+    x0 = max(0, x0 - pad)
+    y0 = max(0, y0 - pad)
+    x1 = min(W, x0 + w + 2 * pad)
+    y1 = min(H, y0 + h + 2 * pad)
+
+    crop_labels = labels[y0:y1, x0:x1]
+    label_ids = {c["label_id"] for c in cluster}
+    cluster_mask = np.isin(crop_labels, list(label_ids))
+
+    canvas = np.full((y1 - y0, x1 - x0, 3), 255, dtype=np.uint8)
+    canvas[cluster_mask] = (0, 0, 0)
+
+    scale = _OCR_SCALE
+    scaled = cv2.resize(
+        canvas, (canvas.shape[1] * scale, canvas.shape[0] * scale),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    pil_img = Image.fromarray(cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB))
+    return pil_img, x0, y0
+
+
+def _ocr_single_token(pil_img: Image.Image) -> str:
+    text = pytesseract.image_to_string(
+        pil_img, config=f"--psm 7 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
+    )
+    return text.strip()
+
+
+def _char_boxes_for_crop(pil_crop: Image.Image) -> List[Tuple[str, int, int, int, int]]:
+    img_w, img_h = pil_crop.size
+    boxes_str = pytesseract.image_to_boxes(
+        pil_crop, config=f"--psm 7 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
+    )
+    entries: List[Tuple[str, int, int, int, int]] = []
+    for line in boxes_str.strip().splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        ch = parts[0]
+        left, bottom, right, top = (int(p) for p in parts[1:5])
+        x = left
+        y = img_h - top
+        w = right - left
+        h = top - bottom
+        entries.append((ch, x, y, w, h))
+    entries.sort(key=lambda e: e[1])
+    return entries
+
+
+def _split_cluster_into_tokens(
+    pil_img: Image.Image, x0: int, y0: int, scale: int
+) -> List[Tuple[str, int, int, int, int]]:
+    """Rare fallback: a single color+proximity cluster still contains more
+    than one {KEY} (e.g. two same-colored tokens sitting close together).
+    Use per-character boxes, restricted to this already-isolated canvas, to
+    split it safely."""
+    entries = _char_boxes_for_crop(pil_img)
+    if not entries:
+        return []
+    concat = "".join(e[0] for e in entries)
+    results: List[Tuple[str, int, int, int, int]] = []
+    for m in _PLACEHOLDER_RE.finditer(concat):
+        span = entries[m.start(): m.end()]
+        if not span:
+            continue
+        xs = [e[1] for e in span]
+        ys = [e[2] for e in span]
+        x2s = [e[1] + e[3] for e in span]
+        y2s = [e[2] + e[4] for e in span]
+        bx, by = min(xs), min(ys)
+        bw, bh = max(x2s) - bx, max(y2s) - by
+        # unscale back to original image coordinates
+        results.append((
+            m.group(1),
+            x0 + bx // scale, y0 + by // scale,
+            bw // scale, bh // scale,
+        ))
+    return results
 
 
 def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
-    """
-    Run Tesseract on *image* and return every placeholder token found
-    together with its bounding box.
+    labels, keep_mask, components = _connected_components(image)
 
-    Args:
-        image: BGR numpy array (as returned by cv2.imread)
+    debug_mask = np.full_like(image, 255)
+    debug_mask[keep_mask] = (0, 0, 0)
+    cv2.imwrite("generated/ocr_debug.png", debug_mask)
 
-    Returns:
-        List of PlaceholderMatch objects; may be empty if none detected.
-    """
-    # Isolate the red label text before handing the image to Tesseract, so
-    # nearby dimension-line art can't get merged into the same OCR "word".
-    # The original `image` argument is untouched — only this OCR-input copy
-    # is transformed.
-    ocr_input = _isolate_label_text(image)
-    rgb = cv2.cvtColor(ocr_input, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
+    clusters = _cluster_components(components)
+    logger.info("Formed %d candidate placeholder cluster(s) from %d component(s).",
+                len(clusters), len(components))
 
-    try:
-        data = pytesseract.image_to_data(
-            pil_img,
-            output_type=pytesseract.Output.DICT,
-            config="--psm 11",   # sparse text – finds characters anywhere
-        )
-    except pytesseract.TesseractNotFoundError:
-        logger.error(
-            "Tesseract not found. Install it and ensure 'tesseract' is on PATH."
-        )
-        raise
-
-    n = len(data["text"])
     matches: List[PlaceholderMatch] = []
 
-    for i in range(n):
-        word = (data["text"][i] or "").strip()
-        if not word:
-            continue
+    for cluster in clusters:
+        pil_img, x0, y0 = _render_cluster_canvas(labels, cluster)
+        raw_text = _ocr_single_token(pil_img)
+        found = list(_PLACEHOLDER_RE.finditer(raw_text))
 
-        # Log every raw OCR word at DEBUG level to help diagnose misreads
-        logger.debug("OCR raw word: '%s'", word)
+        cx, cy, cw, ch = _cluster_bbox(cluster)
+        color = _cluster_color(cluster)
 
-        found = _PLACEHOLDER_RE.findall(word)
-        for token in found:
-            key = token[1:-1]   # strip braces
-            x = int(data["left"][i])
-            y = int(data["top"][i])
-            w = int(data["width"][i])
-            h = int(data["height"][i])
-            logger.debug("Detected placeholder %s at (%d,%d) size %dx%d", token, x, y, w, h)
-            matches.append(PlaceholderMatch(token=token, key=key, x=x, y=y, w=w, h=h))
+        if len(found) == 1:
+            key = found[0].group(1)
+            token = "{" + key + "}"
+            matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+            logger.debug("Cluster at (%d,%d) -> %s (raw ocr='%s')", cx, cy, token, raw_text)
+
+        elif len(found) > 1:
+            logger.warning(
+                "Cluster at (%d,%d) OCR'd as '%s' — contains multiple placeholders, splitting.",
+                cx, cy, raw_text,
+            )
+            split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
+            if split:
+                for key, sx, sy, sw, sh in split:
+                    token = "{" + key + "}"
+                    matches.append(PlaceholderMatch(token=token, key=key, x=sx, y=sy, w=sw, h=sh, color=color))
+                    logger.debug("Split cluster -> %s at (%d,%d)", token, sx, sy)
+            else:
+                logger.warning("Could not split cluster '%s'; keeping merged tokens as-is.", raw_text)
+                for m in found:
+                    key = m.group(1)
+                    token = "{" + key + "}"
+                    matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+
+        else:
+            # No valid {KEY} read on first pass — retry once with a looser
+            # single-word mode before giving up, small crops sometimes need it.
+            fallback_text = pytesseract.image_to_string(
+                pil_img, config=f"--psm 8 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
+            ).strip()
+            fallback_found = list(_PLACEHOLDER_RE.finditer(fallback_text))
+            if len(fallback_found) == 1:
+                key = fallback_found[0].group(1)
+                token = "{" + key + "}"
+                matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+                logger.debug("Cluster at (%d,%d) -> %s (psm8 fallback, raw ocr='%s')", cx, cy, token, fallback_text)
+            else:
+                logger.warning(
+                    "Cluster at (%d,%d) size %dx%d produced no placeholder match "
+                    "(psm7='%s', psm8='%s') — skipping.",
+                    cx, cy, cw, ch, raw_text, fallback_text,
+                )
 
     logger.info("OCR found %d placeholder(s) in image.", len(matches))
     return matches

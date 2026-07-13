@@ -1,0 +1,67 @@
+basebox{
+
+        { key: "box_length", label: "Box Length", unit: "in" }, 
+        { key: "box_height", label: "Box Height", unit: "in" },
+
+        { key: "level_count", label: "Level Count", unit: "in" },
+        { key: "box_design", label: "Box Design", unit: "in" },
+
+        { key: "level_1D", label: "Level 1 Depth", unit: "in" },
+        { key: "level_2D", label: "Level 2 Depth", unit: "in" }, 
+        { key: "level_3D", label: "Level 3 Depth", unit: "in" },
+        { key: "level_4D", label: "Level 4 Depth", unit: "in" }, 
+        { key: "level_5D", label: "Level 5 Depth", unit: "in" },
+        
+        { key: "level_1H", label: "Level 1 Height", unit: "in" },
+        { key: "level_2H", label: "Level 2 Height", unit: "in" },
+        { key: "level_3H", label: "Level 3 Height", unit: "in" },
+        { key: "level_4H", label: "Level 4 Height", unit: "in" },
+        { key: "level_5H", label: "Level 5 Height", unit: "in" },
+
+        { key: "tray_l", label: "Tray (L)", unit: "in" },
+        { key: "tray_b", label: "Tray (B)", unit: "in" },
+        { key: "tray_h", label: "Tray (H)", unit: "in" },
+
+        { key: "drawer_l", label: "Drawer (Length)", unit: "in" },
+        { key: "drawer_d", label: "Drawer (Depth)", unit: "in" },
+        { key: "drawer_h", label: "Drawer (Height)", unit: "in" },
+
+        { key: "Storage_heigth", label: "Storage Height (Outside)", unit: "in" },
+
+        { key: "ply_thickness", label: "Ply Thickness", unit: "in" },
+        { key: "ply_thinness", label: "Ply Thinness", unit: "in" },
+}
+
+
+{
+        "box_length" : "B1"
+        "box_height" : "B2"
+
+        "level_count" : "B3"
+        "box_design" : "B4"
+
+        "level_1D" : "B5"
+        "level_2D" : "B7"
+        "level_3D" : "B9"
+        "level_4D" : "B11"
+        "level_5D"  : "B13"     
+
+        "level_2H" :"B6"
+        "level_3H" :"B8"
+        "level_4H" :"B10"
+        "level_5H" :"B12"
+ 
+        "Storage_heigth" :"B14"
+
+        "tray_l" :"B15"
+        "tray_b" :"B16"
+        "tray_h" :"B17"
+
+        "drawer_l" :"B18"
+        "drawer_d" :"B19"
+        "drawer_h" :"B20"
+
+        "ply_thickness" :"B21"
+        "ply_thinness" :"B22"
+
+}

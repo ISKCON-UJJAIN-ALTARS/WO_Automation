@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes.templates import router as templates_router
+from app.routes.routes_generate import router as templates_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -44,9 +44,6 @@ app = FastAPI(
 )
 
 # ── CORS: allow the configured frontend origin(s) to call this API ───────────
-# ALLOWED_ORIGINS is a comma-separated list, e.g.:
-#   "http://localhost:5173,https://your-project.vercel.app"
-# Defaults to just the local Vite dev server if unset.
 _allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
 _allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
 logger.info("CORS allowed origins: %s", _allowed_origins)
@@ -72,6 +69,8 @@ app.include_router(templates_router, tags=["Work Orders"])
 @app.get("/", include_in_schema=False)
 def root():
     return {"message": "Divine Sky Work Order API is running. Visit /docs for the Swagger UI."}
+
+
 @app.get("/health/", include_in_schema=False)
 def health():
     return {"message": "Divine Sky Work Order API is healthy."}
