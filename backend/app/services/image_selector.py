@@ -70,7 +70,21 @@ def effective_steps(level_count: Any, component_box: Any) -> int:
     return max(steps, 0)
 
 
-def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
+def _depth_condition(provided: Dict[str, Any], depth_fields: list) -> Optional[str]:
+    """'ad_gte_bd' or 'ad_lt_bd', or None if AD/BD weren't both provided."""
+    if not depth_fields or len(depth_fields) < 2:
+        return None
+    ad_field, bd_field = depth_fields[0], depth_fields[1]
+    ad, bd = provided.get(ad_field), provided.get(bd_field)
+    if ad is None or bd is None:
+        return None
+    try:
+        return "ad_gte_bd" if float(ad) >= float(bd) else "ad_lt_bd"
+    except (TypeError, ValueError):
+        return None
+
+
+def _lookup_top_table(provided: Dict[str, Any], fields: list, depth_fields: list) -> Optional[Path]:
     rows = _IMAGE_VARIANTS.get("top")
     if not rows:
         return None
@@ -83,12 +97,14 @@ def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
 
     front_pattern = _normalize_pillar_pattern(front)
     back_pattern = _normalize_pillar_pattern(back)
+    condition = _depth_condition(provided, depth_fields)
 
     for row in rows:
         if (
             row.get("component_box") == component_box
             and row.get("pillar_front_pattern") == front_pattern
             and row.get("pillar_back_pattern") == back_pattern
+            and row.get("depth_condition") in (None, condition)
         ):
             return _TEMPLATES_DIR / row["image"]
     return None
@@ -166,7 +182,7 @@ def resolve_image(template_key: str, cfg: Dict[str, Any], provided: Dict[str, An
 
     candidate: Optional[Path] = None
     if rule_type == "pillar_and_box":
-        candidate = _lookup_top_table(provided, fields)
+        candidate = _lookup_top_table(provided, fields, rule.get("depth_fields", []))
         if not (candidate and candidate.exists()):
             candidate = _find_top_image(provided, prefix, fields)
     elif rule_type == "steps_and_box":

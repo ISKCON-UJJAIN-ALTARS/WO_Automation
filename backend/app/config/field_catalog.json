@@ -153,10 +153,6 @@
     "options": [
       {
         "value": "top1_bottom1",
-        "label": "Top @ Level 1 / Bottom @ Level 1"
-      },
-      {
-        "value": "none",
         "label": "No Box"
       },
       {
@@ -257,5 +253,10 @@
   "ply_thinness": {
     "label": "Ply Thinness",
     "unit": "in"
+  },
+  "box_depth": {
+    "label": "Box Depth",
+    "unit": "in",
+    "type": "number"
   }
 }

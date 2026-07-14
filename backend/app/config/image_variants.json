@@ -9,6 +9,11 @@
     "e.g. '1,0,0,1' and '2,0,0,2' both normalize to 'x,0,0,x'.",
     "See image_selector.py:_normalize_pillar_pattern().",
     "",
+    "When component_box is 'top1_bottom1' (no box), rows also carry a depth_condition",
+    "of 'ad_gte_bd' or 'ad_lt_bd' — computed by comparing altar_depth (AD) against",
+    "box_depth (BD). Rows with no depth_condition key match regardless of AD/BD (used",
+    "for every other component_box value, where the comparison doesn't matter).",
+    "",
     "side_cutting: matched on (component_box, level_count) exactly as given on the chart.",
     "",
     "Any combo not listed in either table falls back to a naming-convention/formula",
@@ -16,10 +21,15 @@
   ],
 
   "top": [
-    { "component_box": "none",         "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image1.png" },
-    { "component_box": "none",         "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image3.png" },
-    { "component_box": "none",         "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image4.png" },
-    { "component_box": "none",         "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image2.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "depth_condition": "ad_gte_bd", "image": "top_image1.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "depth_condition": "ad_gte_bd", "image": "top_image3.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "depth_condition": "ad_gte_bd", "image": "top_image4.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "depth_condition": "ad_gte_bd", "image": "top_image2.png" },
+
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "depth_condition": "ad_lt_bd",  "image": "top_image0.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "depth_condition": "ad_lt_bd",  "image": "top_image1.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "depth_condition": "ad_lt_bd",  "image": "top_image0.png" },
+    { "component_box": "top1_bottom1", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "depth_condition": "ad_lt_bd",  "image": "top_image1.png" },
 
     { "component_box": "top1_bottom2", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image7.png" },
     { "component_box": "top1_bottom2", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image8.png" },
