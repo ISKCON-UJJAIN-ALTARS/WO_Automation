@@ -41,12 +41,9 @@ const VARIANT_META = {
   "3dome_ceiling": { category: "ceiling", label: "3 Dome", sub: "Ceiling Cutting", icon: "dome3" },
   "4dome_ceiling": { category: "ceiling", label: "4 Dome", sub: "Ceiling Cutting", icon: "dome4" },
   top:             { category: "basebox", label: "Top",     sub: "Base Box Cutting", icon: "box" },
-  back_side:       { category: "basebox", label: "Back",    sub: "Base Box Cutting", icon: "box" },
+  side_cutting:    { category: "basebox", label: "Side",    sub: "Base Box Cutting", icon: "box" },
   bottom:          { category: "basebox", label: "Bottom",  sub: "Base Box Cutting", icon: "box" },
-  step_0:          { category: "basebox", label: "Step 0",  sub: "Base Box Cutting", icon: "box" },
-  step_1:          { category: "basebox", label: "Step 1",  sub: "Base Box Cutting", icon: "box" },
-  step_2:          { category: "basebox", label: "Step 2",  sub: "Base Box Cutting", icon: "box" },
-  step_3:          { category: "basebox", label: "Step 3",  sub: "Base Box Cutting", icon: "box" },
+  middle_cutting:  { category: "basebox", label: "Middle",  sub: "Base Box Cutting", icon: "box" },
 };
 
 /**
@@ -87,8 +84,15 @@ export async function loadVariantsFromBackend(apiBase) {
         unit: f.unit,
         type: f.type || "number",
         options: f.options || null,
+        forImageOnly: !!f.for_image_only,
         integer: f.type === "select" && typeof f.options?.[0]?.value === "number" ? false : undefined,
       })),
+      // Fields (e.g. pillar_config/component_box, or level_count/component_box)
+      // that together decide which shape image gets auto-selected — comes
+      // straight from templates.json's image_rule so it stays authoritative,
+      // even when one of those fields (like level_count) is also a normal
+      // Excel-bound field. Empty array = this template only has one shape.
+      imageFieldKeys: cfg.image_rule?.fields || [],
     };
     if (!variants[meta.category]) variants[meta.category] = [];
     variants[meta.category].push(variant);

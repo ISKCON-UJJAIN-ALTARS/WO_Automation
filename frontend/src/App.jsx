@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { CATEGORIES, findCategory, mergeFields, buildVariantInputs, loadVariantsFromBackend } from "./templateConfig";
-import { generateMultiple } from "./api";
+import { generateMultiple, fetchPreviewImage, imageUrl } from "./api";
 import useApiHealth from "./hooks/useApiHealth";
 
 import StepTrail from "./components/StepTrail";
@@ -26,7 +26,7 @@ export default function App() {
   const [selectedCategoryKeys, setSelectedCategoryKeys] = useState([]);
 
   // Step 2: one or more chosen variants ("components") PER category, e.g.
-  // { ceiling: [<3dome obj>], basebox: [<back_side obj>, <bottom_side obj>] }
+  // { ceiling: [<3dome obj>], basebox: [<side_cutting obj>, <bottom_side obj>] }
   const [variantSelections, setVariantSelections] = useState({});
   const [variantStepIndex, setVariantStepIndex] = useState(0);
 
@@ -38,6 +38,11 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState(null); // { kind: 'error' | 'info', title, message }
   const [results, setResults] = useState(null); // array from generateMultiple, or null
+
+  // Live shape previews for variants that support more than one image
+  // (currently 'top' and 'side_cutting'), keyed by variant key:
+  // { [variantKey]: { imageUrl, isFallback, loading } }
+  const [shapePreviews, setShapePreviews] = useState({});
 
   const { apiBase, setApiBase, status: apiStatus, checkApi } = useApiHealth(DEFAULT_API_BASE);
 
@@ -60,7 +65,7 @@ export default function App() {
   }, []);
 
   // Flatten every chosen component across every selected category, in
-  // selection order, e.g. [3dome_ceiling, back_side, bottom_side].
+  // selection order, e.g. [3dome_ceiling, side_cutting, bottom_side].
   const chosenVariants = selectedCategoryKeys.flatMap((k) => variantSelections[k] || []);
   const mergedFields = chosenVariants.length ? mergeFields(chosenVariants) : [];
 
@@ -70,6 +75,41 @@ export default function App() {
   const currentCategoryKey = selectedCategoryKeys[variantStepIndex];
   const currentCategory = findCategory(currentCategoryKey);
   const currentCategorySelections = (currentCategoryKey && variantSelections[currentCategoryKey]) || [];
+
+  // Variants that support more than one shape (top / side_cutting today).
+  const previewableVariants = chosenVariants.filter((v) => v.imageFieldKeys?.length);
+
+  // Whenever the fields that decide a variant's shape are all filled in,
+  // ask the backend which image it would auto-select and show it — so the
+  // user can see the shape update live as they change pillar_config /
+  // component_box / level_count, before hitting Generate.
+  useEffect(() => {
+    previewableVariants.forEach((v) => {
+      const params = {};
+      let complete = true;
+      v.imageFieldKeys.forEach((key) => {
+        const val = values[key];
+        if (val === undefined || val === null || val === "") complete = false;
+        else params[key] = val;
+      });
+
+      if (!complete) {
+        setShapePreviews((prev) => (prev[v.key] ? { ...prev, [v.key]: null } : prev));
+        return;
+      }
+
+      setShapePreviews((prev) => ({ ...prev, [v.key]: { ...prev[v.key], loading: true } }));
+      fetchPreviewImage(apiBase, v.key, params).then((result) => {
+        setShapePreviews((prev) => ({
+          ...prev,
+          [v.key]: result
+            ? { imageUrl: result.image_url, isFallback: result.is_fallback, loading: false }
+            : null,
+        }));
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBase, JSON.stringify(previewableVariants.map((v) => v.key)), JSON.stringify(values)]);
 
   // ── Step 1: multi-select categories ─────────────────────────────────────
 
@@ -172,8 +212,8 @@ export default function App() {
           ok = false;
           return;
         }
-        if (num <= 0) {
-          nextErrors[f.key] = "Must be greater than 0";
+        if (num < 0) {
+          nextErrors[f.key] = "Must be zero or greater";
           ok = false;
           return;
         }
@@ -385,6 +425,19 @@ export default function App() {
                     </div>
                     <div className="variant-summary-sub">{v.sub}</div>
                   </div>
+                  {shapePreviews[v.key] && (
+                    <div className="shape-preview">
+                      <img
+                        src={imageUrl(apiBase, shapePreviews[v.key].imageUrl)}
+                        alt={`${v.label} shape preview`}
+                      />
+                      {shapePreviews[v.key].isFallback && (
+                        <span className="shape-preview-note">
+                          No artwork for this exact combo yet — showing default
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
 

@@ -366,6 +366,30 @@ header.top {
   margin-top: 1px;
 }
 
+.shape-preview {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  max-width: 120px;
+}
+.shape-preview img {
+  width: 96px;
+  height: 64px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+}
+.shape-preview-note {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  color: var(--red);
+  text-align: right;
+  line-height: 1.3;
+}
+
 /* ── Dimension fields (signature element) ────────────────────────────── */
 
 .dim-field {

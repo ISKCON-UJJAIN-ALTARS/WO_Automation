@@ -62,6 +62,12 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/generated", StaticFiles(directory=str(_GENERATED_DIR)), name="generated")
 
+# ── Static files: serve source template artwork under /templates ─────────────
+# Lets the frontend preview which shape image will be picked (via
+# GET /templates/{key}/preview-image) before the user hits Generate.
+_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
+app.mount("/template-assets", StaticFiles(directory=str(_TEMPLATES_DIR)), name="template-assets")
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 app.include_router(templates_router, tags=["Work Orders"])
 

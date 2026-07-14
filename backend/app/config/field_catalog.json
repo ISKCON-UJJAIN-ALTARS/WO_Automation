@@ -1,63 +1,261 @@
 {
-  "altar_length":  { "label": "Altar Length",  "unit": "in", "type": "number" },
-  "altar_depth":   { "label": "Altar Depth",   "unit": "in", "type": "number" },
-  "pillar_width":  { "label": "Pillar Width",  "unit": "in", "type": "number" },
-  "pillar_height": { "label": "Pillar Height", "unit": "in", "type": "number" },  
-  "arch_ratio":    { "label": "Arch Ratio",    "unit": "", "type": "number" },
-
-  "box_length":  { "label": "Box Length",  "unit": "in", "type": "number" },
-  "box_height":  { "label": "Box Height",  "unit": "in", "type": "number" },
+  "altar_length": {
+    "label": "Altar Length",
+    "unit": "in",
+    "type": "number"
+  },
+  "altar_depth": {
+    "label": "Altar Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "pillar_width": {
+    "label": "Pillar Width",
+    "unit": "in",
+    "type": "number"
+  },
+  "pillar_height": {
+    "label": "Pillar Height",
+    "unit": "in",
+    "type": "number"
+  },
+  "arch_ratio": {
+    "label": "Arch Ratio",
+    "unit": "",
+    "type": "number"
+  },
+  "box_length": {
+    "label": "Box Length",
+    "unit": "in",
+    "type": "number"
+  },
+  "box_height": {
+    "label": "Box Height",
+    "unit": "in",
+    "type": "number"
+  },
   "level_count": {
     "label": "Level Count",
     "unit": "",
     "type": "select",
     "options": [
-      { "value": 1, "label": "1" },
-      { "value": 2, "label": "2" },
-      { "value": 3, "label": "3" },
-      { "value": 4, "label": "4" },
-      { "value": 5, "label": "5" }
+      {
+        "value": 1,
+        "label": "1"
+      },
+      {
+        "value": 2,
+        "label": "2"
+      },
+      {
+        "value": 3,
+        "label": "3"
+      },
+      {
+        "value": 4,
+        "label": "4"
+      },
+      {
+        "value": 5,
+        "label": "5"
+      }
     ]
   },
-  
-  "box_design": { "label": "Box Design",
+  "box_design": {
+    "label": "Box Design",
     "unit": "",
     "type": "select",
     "options": [
-      { "value": "Straight", "label": "Straight" },
-      { "value": "Curved", "label": "Curved" },
-      { "value": "Hexagonal", "label": "Hexagonal" },
-      { "value": "Rectangular", "label": "Rectangular" }
+      {
+        "value": "Straight",
+        "label": "Straight"
+      },
+      {
+        "value": "Curved",
+        "label": "Curved"
+      },
+      {
+        "value": "Hexagonal",
+        "label": "Hexagonal"
+      },
+      {
+        "value": "Rectangular",
+        "label": "Rectangular"
+      }
     ]
-   },
-
-  "level_1D": { "label": "Level 1 Depth",  "unit": "in", "type": "number" },
-
-  "level_2D": { "label": "Level 2 Depth",  "unit": "in", "type": "number" },
-  "level_2H": { "label": "Level 2 Wall Height", "unit": "in", "type": "number" },
-
-  "level_3D": { "label": "Level 3 Depth",  "unit": "in", "type": "number" },
-  "level_3H": { "label": "Level 3 Wall Height", "unit": "in", "type": "number" },
-
-  "level_4D": { "label": "Level 4 Depth",  "unit": "in", "type": "number" },
-  "level_4H": { "label": "Level 4 Wall Height", "unit": "in", "type": "number" },
-
-  "level_5D": { "label": "Level 5 Depth",  "unit": "in", "type": "number" },
-  "level_5H": { "label": "Level 5 Wall Height", "unit": "in", "type": "number" },
-
-          
-  "tray_l" :{ "label": "Tray (L)", "unit": "in" },
-  "tray_b" :{ "label": "Tray (B)", "unit": "in" },
-  "tray_h" :{ "label": "Tray (H)", "unit": "in" },
-  
-  "drawer_l" :{ "label": "Drawer (Length)", "unit": "in" },
-  "drawer_d" :{ "label": "Drawer (Depth)", "unit": "in" },
-  "drawer_h" :{ "label": "Drawer (Height)", "unit": "in" },     
-  
-  "Storage_heigth" :{ "label": "Storage Height (Outside)", "unit": "in" },
-  
-  "ply_thickness" :{ "label": "Ply Thickness", "unit": "in" },
-  "ply_thinness" :{ "label": "Ply Thinness", "unit": "in" }
-  
+  },
+  "pillar_config_front": {
+    "label": "Pillar Configuration (Front)",
+    "unit": "",
+    "type": "select",
+    "options": [
+      {
+        "value": "1,0,0,1",
+        "label": "1, 0, 0, 1"
+      },
+      {
+        "value": "1,1,1,1",
+        "label": "1, 1, 1, 1"
+      },
+      {
+        "value": "1,2,2,1",
+        "label": "1, 2, 2, 1"
+      },
+      {
+        "value": "2,0,0,2",
+        "label": "2, 0, 0, 2"
+      },
+      {
+        "value": "2,1,1,2",
+        "label": "2, 1, 1, 2"
+      },
+      {
+        "value": "2,2,2,2",
+        "label": "2, 2, 2, 2"
+      }
+    ]
+  },
+  "pillar_config_back": {
+    "label": "Pillar Configuration (Back)",
+    "unit": "",
+    "type": "select",
+    "options": [
+      {
+        "value": "1,0,0,1",
+        "label": "1, 0, 0, 1"
+      },
+      {
+        "value": "1,1,1,1",
+        "label": "1, 1, 1, 1"
+      },
+      {
+        "value": "1,2,2,1",
+        "label": "1, 2, 2, 1"
+      },
+      {
+        "value": "2,0,0,2",
+        "label": "2, 0, 0, 2"
+      },
+      {
+        "value": "2,1,1,2",
+        "label": "2, 1, 1, 2"
+      },
+      {
+        "value": "2,2,2,2",
+        "label": "2, 2, 2, 2"
+      }
+    ]
+  },
+  "component_box": {
+    "label": "Component Box",
+    "unit": "",
+    "type": "select",
+    "options": [
+      {
+        "value": "top1_bottom1",
+        "label": "Top @ Level 1 / Bottom @ Level 1"
+      },
+      {
+        "value": "none",
+        "label": "No Box"
+      },
+      {
+        "value": "top1_bottom2",
+        "label": "Top @ Level 1 / Bottom @ Level 2"
+      },
+      {
+        "value": "top1_bottom3",
+        "label": "Top @ Level 1 / Bottom @ Level 3"
+      },
+      {
+        "value": "top2_bottom3",
+        "label": "Top @ Level 2 / Bottom @ Level 3"
+      },
+      {
+        "value": "top2_bottom4",
+        "label": "Top @ Level 2 / Bottom @ Level 4"
+      }
+    ]
+  },
+  "level_1D": {
+    "label": "Level 1 Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_2D": {
+    "label": "Level 2 Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_2H": {
+    "label": "Level 2 Wall Height",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_3D": {
+    "label": "Level 3 Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_3H": {
+    "label": "Level 3 Wall Height",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_4D": {
+    "label": "Level 4 Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_4H": {
+    "label": "Level 4 Wall Height",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_5D": {
+    "label": "Level 5 Depth",
+    "unit": "in",
+    "type": "number"
+  },
+  "level_5H": {
+    "label": "Level 5 Wall Height",
+    "unit": "in",
+    "type": "number"
+  },
+  "tray_l": {
+    "label": "Tray (L)",
+    "unit": "in"
+  },
+  "tray_b": {
+    "label": "Tray (B)",
+    "unit": "in"
+  },
+  "tray_h": {
+    "label": "Tray (H)",
+    "unit": "in"
+  },
+  "drawer_l": {
+    "label": "Drawer (Length)",
+    "unit": "in"
+  },
+  "drawer_d": {
+    "label": "Drawer (Depth)",
+    "unit": "in"
+  },
+  "drawer_h": {
+    "label": "Drawer (Height)",
+    "unit": "in"
+  },
+  "Storage_heigth": {
+    "label": "Storage Height (Outside)",
+    "unit": "in"
+  },
+  "ply_thickness": {
+    "label": "Ply Thickness",
+    "unit": "in"
+  },
+  "ply_thinness": {
+    "label": "Ply Thinness",
+    "unit": "in"
+  }
 }
-

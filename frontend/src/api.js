@@ -71,6 +71,27 @@ export function downloadUrl(apiBase, filename) {
   return `${normalizeBase(apiBase)}/generate/download?filename=${encodeURIComponent(filename)}`;
 }
 
+/**
+ * GET /templates/{key}/preview-image?field=value...
+ * Lets the UI show which shape image will be auto-selected (for templates
+ * like 'top' / 'side_cutting' that support more than one shape) before the
+ * user hits Generate. Returns null on any error so callers can just skip
+ * showing a preview rather than crash the form.
+ */
+export async function fetchPreviewImage(apiBase, templateKey, params) {
+  const qs = new URLSearchParams(params).toString();
+  try {
+    const res = await fetch(
+      `${normalizeBase(apiBase)}/templates/${encodeURIComponent(templateKey)}/preview-image?${qs}`,
+      { method: "GET" }
+    );
+    if (!res.ok) return null;
+    return res.json(); // { template, image_url, is_fallback }
+  } catch {
+    return null;
+  }
+}
+
 /** Builds the absolute URL for the static-mounted generated image itself. */
 export function imageUrl(apiBase, imagePath) {
   return `${normalizeBase(apiBase)}${imagePath}`;

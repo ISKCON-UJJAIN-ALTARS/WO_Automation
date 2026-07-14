@@ -19,12 +19,9 @@ ALL_TEMPLATE_KEYS = Literal[
     "3dome_ceiling",
     "4dome_ceiling",
     "top",
-    "back_side",
+    "side_cutting",
     "bottom",
-    "step_0",
-    "step_1",
-    "step_2",
-    "step_3",
+    "middle_cutting",
 ]
 
 

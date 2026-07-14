@@ -22,9 +22,15 @@
     }
   },
   "top": {
-    "template_image": "templates/basebox_standard.png",
+    "template_image": "templates/top_image1.png",
     "input_group": "altar",
     "input_fields": ["altar_length", "altar_depth", "pillar_width", "pillar_height"],
+    "image_fields": ["pillar_config_front", "pillar_config_back", "component_box"],
+    "image_rule": {
+      "type": "pillar_and_box",
+      "prefix": "top",
+      "fields": ["pillar_config_front", "pillar_config_back", "component_box"]
+    },
     "output_sheet": "WO_Automation",
     "output_mappings": {
       "TL": "E8", "TSH": "E9", "OW": "E10", "INP": "E11",
@@ -33,10 +39,12 @@
       "SH": "E20", "WP": "E21", "PH": "E22", "PL": "E23"
     }
   },
-  "back_side": {
+  "side_cutting": {
     "template_image": "templates/back_side.png",
     "input_group": "basebox",
-    "input_fields": ["box_length", "box_height", "box_design"],
+    "input_fields": ["box_length", "box_height", "box_design", "level_count"],
+    "image_fields": ["component_box"],
+    "image_rule": { "type": "steps_and_box", "prefix": "side", "fields": ["level_count", "component_box"] },
     "output_sheet": "WO_Automation",
     "output_mappings": { "L": "AH17", "H": "AE14" }
   },
@@ -50,45 +58,20 @@
     "output_sheet": "WO_Automation",
     "output_mappings": { "L": "AH7", "H": "AE4" }
   },
-  "step_0": {
-    "template_image": "templates/step0.png",
-    "input_group": "basebox",
-    "input_fields": ["box_length", "box_height", "level_count", "box_design", "level_1D"],
-    "output_sheet": "WO_Automation",
-    "output_mappings": { "L": "E8", "H": "E9" }
-  },
-  "step_1": {
-    "template_image": "templates/step1.png",
+  "middle_cutting": {
+    "_notes": "output_mappings cells are TODO — not given yet. Empty string = safely skipped (placeholder stays unfilled on the image) until the real Excel cell addresses are filled in.",
+    "template_image": "templates/side_step0.png",
     "input_group": "basebox",
     "input_fields": [
-      "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_2H", "level_2D"
+      "box_length", "box_height", "box_design", "level_count",
+      "level_1D", "level_2H", "level_2D", "level_3H", "level_3D",
+      "level_4H", "level_4D", "level_5H", "level_5D"
     ],
+    "image_rule": { "type": "level_steps", "prefix": "middle", "fields": ["level_count"] },
     "output_sheet": "WO_Automation",
     "output_mappings": {
-      "L": "E8", "H": "E9", "L1": "E10", "H1": "E11", "L2": "E12", "H2": "E13"
-    }
-  },
-  "step_2": {
-    "template_image": "templates/step2.png",
-    "input_group": "basebox",
-    "input_fields": [ "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_2H", "level_2D","level_3H", "level_3D"],
-    "output_sheet": "WO_Automation",
-    "output_mappings": {
-      "L": "AJ30", "H": "AK20", "L1": "AI19", "H1": "AM26",
-      "L2": "AK21", "H2": "AH26", "H3": "AL22", "L3": "AL23"
-    }
-  },
-  "step_3": {
-    "template_image": "templates/step3.png",
-    "input_group": "basebox",
-    "input_fields": [ "box_length", "box_height", "level_count", "box_design",
-      "level_1D", "level_2H", "level_2D","level_3H", "level_3D","level_4H", "level_4D" ],
-    "output_sheet": "WO_Automation",
-    "output_mappings": {
-      "L": "E8", "H": "E9", "L1": "E10", "H1": "E11", "L2": "E12", "H2": "E13",
-      "H3": "E22", "L3": "E23", "H4": "E22", "L4": "E23"
+      "L": "", "H": "", "L1": "", "H1": "", "L2": "", "H2": "",
+      "L3": "", "H3": "", "L4": "", "H4": ""
     }
   }
 }

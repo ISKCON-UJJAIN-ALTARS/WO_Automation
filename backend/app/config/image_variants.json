@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "Explicit lookup tables for shape-variant image selection.",
+    "",
+    "top: matched on (component_box, normalized pillar_front, normalized pillar_back).",
+    "Normalization: each of the 4 comma-separated positions in a pillar_config becomes",
+    "'0' if it's exactly zero, otherwise 'x' (pillar SIZE, 1 vs 2, doesn't change which",
+    "image is used — only whether a pillar is present at that position does).",
+    "e.g. '1,0,0,1' and '2,0,0,2' both normalize to 'x,0,0,x'.",
+    "See image_selector.py:_normalize_pillar_pattern().",
+    "",
+    "side_cutting: matched on (component_box, level_count) exactly as given on the chart.",
+    "",
+    "Any combo not listed in either table falls back to a naming-convention/formula",
+    "guess, and then to the template's default image if that's missing too."
+  ],
+
+  "top": [
+    { "component_box": "none",         "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image1.png" },
+    { "component_box": "none",         "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image3.png" },
+    { "component_box": "none",         "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image4.png" },
+    { "component_box": "none",         "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image2.png" },
+
+    { "component_box": "top1_bottom2", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image7.png" },
+    { "component_box": "top1_bottom2", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image8.png" },
+
+    { "component_box": "top1_bottom3", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image6.png" },
+    { "component_box": "top1_bottom3", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image5.png" },
+    { "component_box": "top1_bottom3", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image6.png" },
+    { "component_box": "top1_bottom3", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image5.png" },
+
+    { "component_box": "top2_bottom3", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image6.png" },
+    { "component_box": "top2_bottom3", "pillar_front_pattern": "x,0,0,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image5.png" },
+    { "component_box": "top2_bottom3", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,0,0,x", "image": "top_image6.png" },
+    { "component_box": "top2_bottom3", "pillar_front_pattern": "x,x,x,x", "pillar_back_pattern": "x,x,x,x", "image": "top_image5.png" }
+  ],
+
+  "side_cutting": [
+    { "component_box": "top1_bottom1", "level_count": 1, "image": "side_step0.png" },
+    { "component_box": "top1_bottom1", "level_count": 2, "image": "side_step1.png" },
+    { "component_box": "top1_bottom2", "level_count": 2, "image": "side_step0.png" },
+    { "component_box": "top1_bottom1", "level_count": 3, "image": "side_step2.png" },
+    { "component_box": "top1_bottom2", "level_count": 3, "image": "side_step1.png" },
+    { "component_box": "top1_bottom3", "level_count": 3, "image": "side_step0.png" },
+    { "component_box": "top2_bottom3", "level_count": 3, "image": "side_step1.png" }
+  ],
+
+  "middle_cutting": [
+    { "level_count": 1, "image": "side_step0.png" },
+    { "level_count": 2, "image": "side_step1.png" },
+    { "level_count": 3, "image": "side_step2.png" },
+    { "level_count": 4, "image": "side_step3.png" }
+  ]
+}

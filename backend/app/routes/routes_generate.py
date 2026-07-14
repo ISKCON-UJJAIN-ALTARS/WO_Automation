@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.config.template_config import load_template_config
 from app.schemas.request_models import GenerateRequest, GenerateResponse
+from app.services.image_selector import resolve_image
 from app.services.sheets_service import write_inputs_and_read_outputs
 from app.services.template_service import render_template
 
@@ -45,7 +46,7 @@ def generate_work_order(request: GenerateRequest):
 
     # ── Validate required inputs for this specific template ───────────────
     # Different templates need different subsets of their group's fields
-    # (e.g. 'back_side' only needs 3 basebox fields, 'bottom' needs 9), so
+    # (e.g. 'side_cutting' only needs 3 basebox fields, 'bottom' needs 9), so
     # required-ness is checked per-template against cfg["input_fields"]
     # rather than via one rigid Pydantic model per group.
     provided = request.inputs.as_dict()
@@ -79,8 +80,12 @@ def generate_work_order(request: GenerateRequest):
     logger.info("Outputs: %s", output_values)
 
     # ── Step 2: Render template image ──────────────────────────────────────
-    template_rel_path = cfg["template_image"]           # e.g. "templates/4dome_ceiling.png"
-    template_abs_path = _BASE_DIR / template_rel_path
+    # For most templates this is just the static template_image. For 'top'
+    # and 'side_cutting' (which support more than one shape), image_rule tells
+    # resolve_image() to pick the right variant based on the submitted
+    # pillar_config / component_box / level_count values, falling back to
+    # the default template_image if that exact combo has no artwork yet.
+    template_abs_path = resolve_image(template_key, cfg, provided)
 
     try:
         output_path = render_template(template_abs_path, output_values)
@@ -100,6 +105,33 @@ def generate_work_order(request: GenerateRequest):
         image_path=relative_output,
         values=output_values,
     )
+
+
+@router.get("/templates/{template_key}/preview-image", summary="Preview which shape image will be auto-selected")
+def preview_template_image(template_key: str, request: Request):
+    """
+    Given the same shape-selector fields the wizard form collects (e.g.
+    pillar_config, component_box, level_count as query params), returns the
+    relative URL of the image that /generate would pick for this combo —
+    without writing to Excel or rendering placeholders. Lets the frontend
+    show a live preview as the user changes dropdowns.
+    """
+    if template_key not in _TEMPLATE_CONFIG:
+        available = list(_TEMPLATE_CONFIG.keys())
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template '{template_key}' not found. Available templates: {available}",
+        )
+
+    cfg = _TEMPLATE_CONFIG[template_key]
+    provided = dict(request.query_params)
+
+    image_path = resolve_image(template_key, cfg, provided)
+    return {
+        "template": template_key,
+        "image_url": f"/template-assets/{image_path.name}",
+        "is_fallback": image_path == (_BASE_DIR / cfg["template_image"]),
+    }
 
 
 @router.get("/generate/download", summary="Download the latest generated image")
@@ -128,6 +160,7 @@ def list_templates():
         name: {
             "template_image": cfg["template_image"],
             "input_fields": cfg["input_fields"],
+            "image_rule": cfg.get("image_rule"),
         }
         for name, cfg in _TEMPLATE_CONFIG.items()
     }
