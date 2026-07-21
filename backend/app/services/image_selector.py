@@ -1,7 +1,8 @@
 """
 Picks the correct shape-variant image for templates that have more than one
-possible drawing (currently the basebox 'top' piece and the 'side_cutting'
-piece), instead of always using one hardcoded template_image.
+possible drawing (currently the basebox 'top', 'side_cutting', and
+'middle_cutting' pieces), instead of always using one hardcoded
+template_image.
 
 Two ways a combo can resolve to an image, tried in this order:
 
@@ -11,13 +12,17 @@ Two ways a combo can resolve to an image, tried in this order:
      - component_box                    (used as-is, e.g. "top1_bottom3")
      - normalized pillar_config_front   (see _normalize_pillar_pattern)
      - normalized pillar_config_back
+     - elephant ("yes"/"no")
    Normalization: each of the 4 comma-separated positions in a pillar_config
    becomes '0' if it's exactly zero, otherwise 'x' — the actual pillar size
    (1 vs 2) doesn't change which image is used, only whether a pillar is
    present at that position. e.g. '1,0,0,1' and '2,0,0,2' both normalize to
-   'x,0,0,x'.
+   'x,0,0,x'. All-zero ('0,0,0,0') is its own distinct pattern.
 
-2. NAMING-CONVENTION GUESS (fallback for combos not in the table yet)
+   For 'side_cutting', rows are matched on (component_box, level_count).
+   For 'middle_cutting', rows are matched on level_count alone.
+
+2. NAMING-CONVENTION / FORMULA GUESS (fallback for combos not in the table)
      TOP  -> top_<front_code>_<back_code>_<component_box>.png
      SIDE -> side_step<N>_<component_box>.png, N = effective_steps(...)
 
@@ -53,7 +58,7 @@ _IMAGE_VARIANTS = _load_image_variants()
 
 
 def _normalize_pillar_pattern(value: Any) -> str:
-    """'1,0,0,1' -> 'x,0,0,x'   '2,2,2,2' -> 'x,x,x,x'   '1,2,2,1' -> 'x,x,x,x'"""
+    """'1,0,0,1' -> 'x,0,0,x'   '2,2,2,2' -> 'x,x,x,x'   '0,0,0,0' -> '0,0,0,0'"""
     parts = [p.strip() for p in str(value).split(",")]
     return ",".join("0" if p == "0" else "x" for p in parts)
 
@@ -70,41 +75,27 @@ def effective_steps(level_count: Any, component_box: Any) -> int:
     return max(steps, 0)
 
 
-def _depth_condition(provided: Dict[str, Any], depth_fields: list) -> Optional[str]:
-    """'ad_gte_bd' or 'ad_lt_bd', or None if AD/BD weren't both provided."""
-    if not depth_fields or len(depth_fields) < 2:
-        return None
-    ad_field, bd_field = depth_fields[0], depth_fields[1]
-    ad, bd = provided.get(ad_field), provided.get(bd_field)
-    if ad is None or bd is None:
-        return None
-    try:
-        return "ad_gte_bd" if float(ad) >= float(bd) else "ad_lt_bd"
-    except (TypeError, ValueError):
-        return None
-
-
-def _lookup_top_table(provided: Dict[str, Any], fields: list, depth_fields: list) -> Optional[Path]:
+def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
     rows = _IMAGE_VARIANTS.get("top")
     if not rows:
         return None
-    front_field, back_field, box_field = (fields + [None, None, None])[:3]
+    front_field, back_field, box_field, elephant_field = (fields + [None, None, None, None])[:4]
     front = provided.get(front_field) if front_field else None
     back = provided.get(back_field) if back_field else None
     if front is None or back is None:
         return None
     component_box = (provided.get(box_field) if box_field else None) or "none"
+    elephant = str((provided.get(elephant_field) if elephant_field else None) or "no").lower()
 
     front_pattern = _normalize_pillar_pattern(front)
     back_pattern = _normalize_pillar_pattern(back)
-    condition = _depth_condition(provided, depth_fields)
 
     for row in rows:
         if (
             row.get("component_box") == component_box
             and row.get("pillar_front_pattern") == front_pattern
             and row.get("pillar_back_pattern") == back_pattern
-            and row.get("depth_condition") in (None, condition)
+            and str(row.get("elephant", "no")).lower() == elephant
         ):
             return _TEMPLATES_DIR / row["image"]
     return None
@@ -148,6 +139,9 @@ def _lookup_level_table(template_key: str, provided: Dict[str, Any], fields: lis
         if int(row.get("level_count", -1)) == level_count:
             return _TEMPLATES_DIR / row["image"]
     return None
+
+
+def _find_top_image(provided: Dict[str, Any], prefix: str, fields: list) -> Optional[Path]:
     """Naming-convention fallback guess, used only if the table has no matching row."""
     front_field, back_field, box_field = (fields + [None, None, None])[:3]
     front = provided.get(front_field) if front_field else None
@@ -182,7 +176,7 @@ def resolve_image(template_key: str, cfg: Dict[str, Any], provided: Dict[str, An
 
     candidate: Optional[Path] = None
     if rule_type == "pillar_and_box":
-        candidate = _lookup_top_table(provided, fields, rule.get("depth_fields", []))
+        candidate = _lookup_top_table(provided, fields)
         if not (candidate and candidate.exists()):
             candidate = _find_top_image(provided, prefix, fields)
     elif rule_type == "steps_and_box":

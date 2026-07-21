@@ -25,12 +25,11 @@
     "template_image": "templates/top_image1.png",
     "input_group": "altar",
     "input_fields": ["altar_length", "altar_depth", "pillar_width", "pillar_height"],
-    "image_fields": ["pillar_config_front", "pillar_config_back", "component_box", "box_depth"],
+    "image_fields": ["pillar_config_front", "pillar_config_back", "component_box", "elephant"],
     "image_rule": {
       "type": "pillar_and_box",
       "prefix": "top",
-      "fields": ["pillar_config_front", "pillar_config_back", "component_box"],
-      "depth_fields": ["altar_depth", "box_depth"]
+      "fields": ["pillar_config_front", "pillar_config_back", "component_box", "elephant"]
     },
     "output_sheet": "WO_Automation",
     "output_mappings": {

@@ -112,6 +112,10 @@
       {
         "value": "2,2,2,2",
         "label": "2, 2, 2, 2"
+      },
+      {
+        "value": "0,0,0,0",
+        "label": "0, 0, 0, 0 (No Pillars)"
       }
     ]
   },
@@ -143,6 +147,10 @@
       {
         "value": "2,2,2,2",
         "label": "2, 2, 2, 2"
+      },
+      {
+        "value": "0,0,0,0",
+        "label": "0, 0, 0, 0 (No Pillars)"
       }
     ]
   },
@@ -170,6 +178,10 @@
       {
         "value": "top2_bottom4",
         "label": "Top @ Level 2 / Bottom @ Level 4"
+      },
+      {
+        "value": "top2_bottom2",
+        "label": "Top @ Level 2 / Bottom @ Level 2"
       }
     ]
   },
@@ -254,9 +266,19 @@
     "label": "Ply Thinness",
     "unit": "in"
   },
-  "box_depth": {
-    "label": "Box Depth",
-    "unit": "in",
-    "type": "number"
+  "elephant": {
+    "label": "Elephant",
+    "unit": "",
+    "type": "select",
+    "options": [
+      {
+        "value": "no",
+        "label": "No"
+      },
+      {
+        "value": "yes",
+        "label": "Yes"
+      }
+    ]
   }
 }
