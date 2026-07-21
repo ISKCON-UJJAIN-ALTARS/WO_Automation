@@ -9,8 +9,14 @@
     "2,0,0,2 both normalize to x,0,0,x. All-zero (0,0,0,0) is its own distinct pattern.",
     "See image_selector.py:_normalize_pillar_pattern().",
     "",
-    "elephant (yes/no) replaces the earlier altar-depth-vs-box-depth comparison entirely \u2014",
-    "when elephant=yes, the front pillar pattern is ignored (only back + box + elephant matter).",
+    "elephant (yes/no) replaces the earlier altar-depth-vs-box-depth comparison entirely.",
+    "",
+    "As of the latest rule chart, only component_box top1_bottom1 and top2_bottom2 (and only",
+    "when elephant=no) have rows for BOTH front patterns (x,0,0,x and 0,0,0,0); every other",
+    "box/elephant combination only has a row for front=x,0,0,x. A request that lands on a",
+    "combo with no matching row (e.g. front=0,0,0,0 on top1_bottom2, or any 0,0,0,0-front row",
+    "with elephant=yes) falls through to the naming-convention guess / default image \u2014 this is",
+    "expected, not a bug, unless a future rule chart adds that row explicitly.",
     "",
     "side_cutting: matched on (component_box, level_count) exactly as given on the chart.",
     "",
@@ -63,20 +69,6 @@
       "image": "top_image7.png"
     },
     {
-      "component_box": "top1_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "no",
-      "image": "top_image9.png"
-    },
-    {
-      "component_box": "top1_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "no",
-      "image": "top_image8.png"
-    },
-    {
       "component_box": "top1_bottom3",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,0,0,x",
@@ -91,46 +83,32 @@
       "image": "top_image7.png"
     },
     {
-      "component_box": "top1_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "no",
-      "image": "top_image9.png"
-    },
-    {
-      "component_box": "top1_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "no",
-      "image": "top_image8.png"
-    },
-    {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,0,0,x",
       "elephant": "no",
-      "image": "top_image12.png"
+      "image": "top_image2.png"
     },
     {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,x,x,x",
       "elephant": "no",
-      "image": "top_image13.png"
+      "image": "top_image4.png"
     },
     {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "0,0,0,0",
       "pillar_back_pattern": "x,0,0,x",
       "elephant": "no",
-      "image": "top_image11.png"
+      "image": "top_image15.png"
     },
     {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "0,0,0,0",
       "pillar_back_pattern": "x,x,x,x",
       "elephant": "no",
-      "image": "top_image10.png"
+      "image": "top_image14.png"
     },
     {
       "component_box": "top2_bottom3",
@@ -147,20 +125,6 @@
       "image": "top_image13.png"
     },
     {
-      "component_box": "top2_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "no",
-      "image": "top_image11.png"
-    },
-    {
-      "component_box": "top2_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "no",
-      "image": "top_image10.png"
-    },
-    {
       "component_box": "top1_bottom1",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,0,0,x",
@@ -175,20 +139,6 @@
       "image": "top_image5.png"
     },
     {
-      "component_box": "top1_bottom1",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "yes",
-      "image": "top_image1.png"
-    },
-    {
-      "component_box": "top1_bottom1",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "yes",
-      "image": "top_image5.png"
-    },
-    {
       "component_box": "top1_bottom2",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,0,0,x",
@@ -198,20 +148,6 @@
     {
       "component_box": "top1_bottom2",
       "pillar_front_pattern": "x,0,0,x",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "yes",
-      "image": "top_image8.png"
-    },
-    {
-      "component_box": "top1_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "yes",
-      "image": "top_image9.png"
-    },
-    {
-      "component_box": "top1_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
       "pillar_back_pattern": "x,x,x,x",
       "elephant": "yes",
       "image": "top_image8.png"
@@ -231,46 +167,18 @@
       "image": "top_image8.png"
     },
     {
-      "component_box": "top1_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "yes",
-      "image": "top_image9.png"
-    },
-    {
-      "component_box": "top1_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "yes",
-      "image": "top_image8.png"
-    },
-    {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,0,0,x",
       "elephant": "yes",
-      "image": "top_image11.png"
+      "image": "top_image15.png"
     },
     {
       "component_box": "top2_bottom2",
       "pillar_front_pattern": "x,0,0,x",
       "pillar_back_pattern": "x,x,x,x",
       "elephant": "yes",
-      "image": "top_image10.png"
-    },
-    {
-      "component_box": "top2_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "yes",
-      "image": "top_image11.png"
-    },
-    {
-      "component_box": "top2_bottom2",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "yes",
-      "image": "top_image10.png"
+      "image": "top_image14.png"
     },
     {
       "component_box": "top2_bottom3",
@@ -282,20 +190,6 @@
     {
       "component_box": "top2_bottom3",
       "pillar_front_pattern": "x,0,0,x",
-      "pillar_back_pattern": "x,x,x,x",
-      "elephant": "yes",
-      "image": "top_image10.png"
-    },
-    {
-      "component_box": "top2_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
-      "pillar_back_pattern": "x,0,0,x",
-      "elephant": "yes",
-      "image": "top_image11.png"
-    },
-    {
-      "component_box": "top2_bottom3",
-      "pillar_front_pattern": "0,0,0,0",
       "pillar_back_pattern": "x,x,x,x",
       "elephant": "yes",
       "image": "top_image10.png"
