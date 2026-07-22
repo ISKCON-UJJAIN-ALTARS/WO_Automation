@@ -16,7 +16,7 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Font settings ─────────────────────────────────────────────────────────────
 _FONT       = cv2.FONT_HERSHEY_SIMPLEX
-_FONT_SCALE = 0.8
+_FONT_SCALE = 2
 _FONT_THICK = 2
 # No hardcoded _TEXT_COLOR anymore — each placeholder's replacement text is
 # rendered in that same placeholder's own original color (match.color),
