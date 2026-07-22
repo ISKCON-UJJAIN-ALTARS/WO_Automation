@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -33,17 +33,32 @@ _MAX_COMPONENT_FRACTION = 0.15
 _MAX_CLUSTER_ASPECT_RATIO = 20.0
 
 # Upscale factor applied to each isolated placeholder crop before OCR.
-_OCR_SCALE = 3
+# Bumped from 3 -> 5: small/thin single-character clusters (e.g. "{S}")
+# were reading as empty strings or noise ('EE', 'CE') at 3x.
+_OCR_SCALE = 5
 
 # Two components are considered part of the SAME placeholder token only if
 # they are close together AND similar in color. This is what keeps
 # neighbouring-but-different labels (e.g. a green {H3} next to a purple
 # {L3}) from being fused into one OCR read.
 _COLOR_DIST_THRESHOLD = 55.0   # Euclidean distance in BGR space
-_GAP_HEIGHT_MULTIPLIER = 1.6   # max horizontal gap, in units of avg comp height
-_VERTICAL_ALIGN_FRACTION = 0.8  # max centroid y-difference, in units of avg comp height
+_GAP_HEIGHT_MULTIPLIER = 1.6   # max horizontal gap, in units of ref comp height
+_VERTICAL_ALIGN_FRACTION = 0.4  # max centroid y-difference, in units of ref comp height
+# NOTE: previously 0.8, and computed against the AVERAGE of the two
+# components' heights. That let a single anomalously-tall component (e.g.
+# antialiasing bridging two glyphs) drag its threshold up and wrongly merge
+# components sitting on different rows into one giant cluster. We now use
+# min(h) as the reference height (see _cluster_components) and tightened
+# the fraction, both of which make row-bridging much harder.
+
+# When the first-pass cluster is retried at a stricter alignment tolerance
+# (row-aware re-split), use this much tighter fraction.
+_RESPLIT_VERTICAL_ALIGN_FRACTION = 0.15
+_RESPLIT_GAP_HEIGHT_MULTIPLIER = 1.2
 
 _CANVAS_PAD = 4
+
+_DEBUG_DIR = "generated/ocr_debug_clusters"
 
 
 @dataclass
@@ -113,30 +128,41 @@ class _UnionFind:
             self.parent[ra] = rb
 
 
-def _cluster_components(components: List[dict]) -> List[List[dict]]:
+def _cluster_components(
+    components: List[dict],
+    vertical_align_fraction: float = _VERTICAL_ALIGN_FRACTION,
+    gap_height_multiplier: float = _GAP_HEIGHT_MULTIPLIER,
+) -> List[List[dict]]:
     """Group components into probable single-placeholder clusters using
     spatial proximity + color similarity, so that visually distinct
-    placeholders never get merged even if they sit close together."""
+    placeholders never get merged even if they sit close together.
+
+    Reference height for both the gap and vertical-alignment checks is
+    min(a.h, b.h) rather than the average: this stops one abnormally tall
+    component (e.g. antialiasing bridging two glyphs, or a stray bracket)
+    from inflating the tolerance and pulling in a component from a
+    different row/placeholder.
+    """
     n = len(components)
     uf = _UnionFind(n)
     for i in range(n):
         a = components[i]
         for j in range(i + 1, n):
             b = components[j]
-            avg_h = (a["h"] + b["h"]) / 2.0
-            if avg_h <= 0:
+            ref_h = min(a["h"], b["h"])
+            if ref_h <= 0:
                 continue
 
             a_cy = a["y"] + a["h"] / 2.0
             b_cy = b["y"] + b["h"] / 2.0
-            if abs(a_cy - b_cy) > avg_h * _VERTICAL_ALIGN_FRACTION:
+            if abs(a_cy - b_cy) > ref_h * vertical_align_fraction:
                 continue
 
             if a["x"] <= b["x"]:
                 gap = b["x"] - (a["x"] + a["w"])
             else:
                 gap = a["x"] - (b["x"] + b["w"])
-            if gap > avg_h * _GAP_HEIGHT_MULTIPLIER:
+            if gap > ref_h * gap_height_multiplier:
                 continue
 
             ca, cb = np.array(a["color"], dtype=float), np.array(b["color"], dtype=float)
@@ -194,11 +220,32 @@ def _render_cluster_canvas(
     return pil_img, x0, y0
 
 
-def _ocr_single_token(pil_img: Image.Image) -> str:
+def _dump_debug_canvas(pil_img: Image.Image, idx: int, x0: int, y0: int, tag: str = "") -> None:
+    try:
+        os.makedirs(_DEBUG_DIR, exist_ok=True)
+        suffix = f"_{tag}" if tag else ""
+        path = os.path.join(_DEBUG_DIR, f"cluster_{idx:02d}_{x0}_{y0}{suffix}.png")
+        pil_img.save(path)
+    except Exception:
+        logger.exception("Failed to write debug cluster canvas (idx=%d)", idx)
+
+
+def _ocr_single_token(pil_img: Image.Image, psm: int) -> str:
     text = pytesseract.image_to_string(
-        pil_img, config=f"--psm 7 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
+        pil_img, config=f"--psm {psm} -c tessedit_char_whitelist={_CHAR_WHITELIST}"
     )
     return text.strip()
+
+
+def _ocr_with_fallbacks(pil_img: Image.Image) -> Tuple[str, int]:
+    """Try a sequence of PSM modes until one yields exactly one clean
+    {KEY} match. Returns (text, psm_used)."""
+    for psm in (7, 8, 6):
+        text = _ocr_single_token(pil_img, psm)
+        if len(list(_PLACEHOLDER_RE.finditer(text))) >= 1:
+            return text, psm
+    # nothing matched cleanly on any pass; return the psm7 read for logging
+    return _ocr_single_token(pil_img, 7), 7
 
 
 def _char_boxes_for_crop(pil_crop: Image.Image) -> List[Tuple[str, int, int, int, int]]:
@@ -225,10 +272,10 @@ def _char_boxes_for_crop(pil_crop: Image.Image) -> List[Tuple[str, int, int, int
 def _split_cluster_into_tokens(
     pil_img: Image.Image, x0: int, y0: int, scale: int
 ) -> List[Tuple[str, int, int, int, int]]:
-    """Rare fallback: a single color+proximity cluster still contains more
-    than one {KEY} (e.g. two same-colored tokens sitting close together).
-    Use per-character boxes, restricted to this already-isolated canvas, to
-    split it safely."""
+    """Fallback: a single color+proximity cluster still contains more than
+    one {KEY} (e.g. two same-colored tokens sitting close together, or two
+    rows that survived the row re-split). Use per-character boxes,
+    restricted to this already-isolated canvas, to split it safely."""
     entries = _char_boxes_for_crop(pil_img)
     if not entries:
         return []
@@ -267,11 +314,80 @@ def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> 
     return kept
 
 
+def _resplit_cluster_by_rows(cluster: List[dict]) -> List[List[dict]]:
+    """Re-cluster a single (probably over-merged) cluster's own components
+    using a much stricter vertical-alignment tolerance. This recovers
+    cases where the original pass fused two different rows/placeholders
+    into one oversized bbox that then OCR'd as garbage (e.g. '{A', '}',
+    'W}1N}'). If the stricter pass still yields just one group, there was
+    nothing to split and the caller should fall back to character-box
+    splitting instead."""
+    if len(cluster) < 2:
+        return [cluster]
+    subclusters = _cluster_components(
+        cluster,
+        vertical_align_fraction=_RESPLIT_VERTICAL_ALIGN_FRACTION,
+        gap_height_multiplier=_RESPLIT_GAP_HEIGHT_MULTIPLIER,
+    )
+    return subclusters
+
+
+def _ocr_cluster(
+    labels: np.ndarray, cluster: List[dict], idx: int, log_prefix: str = ""
+) -> List[PlaceholderMatch]:
+    """Run the full OCR pipeline (render -> OCR w/ fallbacks -> split if
+    needed) against a single cluster and return whatever matches it
+    resolves to. Used both for the initial pass and for row-resplit
+    subclusters."""
+    pil_img, x0, y0 = _render_cluster_canvas(labels, cluster)
+    _dump_debug_canvas(pil_img, idx, x0, y0, tag=log_prefix)
+
+    raw_text, psm_used = _ocr_with_fallbacks(pil_img)
+    found = list(_PLACEHOLDER_RE.finditer(raw_text))
+
+    cx, cy, cw, ch = _cluster_bbox(cluster)
+    color = _cluster_color(cluster)
+
+    matches: List[PlaceholderMatch] = []
+
+    if len(found) == 1:
+        key = found[0].group(1)
+        token = "{" + key + "}"
+        matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+        logger.debug(
+            "%sCluster at (%d,%d) -> %s (psm%d ocr='%s')",
+            log_prefix, cx, cy, token, psm_used, raw_text,
+        )
+        return matches
+
+    if len(found) > 1:
+        logger.warning(
+            "%sCluster at (%d,%d) OCR'd as '%s' — contains multiple placeholders, splitting.",
+            log_prefix, cx, cy, raw_text,
+        )
+        split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
+        if split:
+            for key, sx, sy, sw, sh in split:
+                token = "{" + key + "}"
+                matches.append(PlaceholderMatch(token=token, key=key, x=sx, y=sy, w=sw, h=sh, color=color))
+                logger.debug("%sSplit cluster -> %s at (%d,%d)", log_prefix, token, sx, sy)
+        else:
+            logger.warning("%sCould not split cluster '%s'; keeping merged tokens as-is.", log_prefix, raw_text)
+            for m in found:
+                key = m.group(1)
+                token = "{" + key + "}"
+                matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+        return matches
+
+    return matches  # empty: caller decides what to try next
+
+
 def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
     labels, keep_mask, components = _connected_components(image)
 
     debug_mask = np.full_like(image, 255)
     debug_mask[keep_mask] = (0, 0, 0)
+    os.makedirs("generated", exist_ok=True)
     cv2.imwrite("generated/ocr_debug.png", debug_mask)
 
     clusters = _cluster_components(components)
@@ -281,56 +397,53 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
 
     matches: List[PlaceholderMatch] = []
 
-    for cluster in clusters:
-        pil_img, x0, y0 = _render_cluster_canvas(labels, cluster)
-        raw_text = _ocr_single_token(pil_img)
-        found = list(_PLACEHOLDER_RE.finditer(raw_text))
+    for idx, cluster in enumerate(clusters):
+        cluster_matches = _ocr_cluster(labels, cluster, idx)
 
+        if cluster_matches:
+            matches.extend(cluster_matches)
+            continue
+
+        # First pass found nothing. Before giving up, check whether this
+        # cluster looks like it fused multiple rows/tokens together (large
+        # bbox relative to its own components) and retry with a much
+        # stricter row-aware re-split.
         cx, cy, cw, ch = _cluster_bbox(cluster)
-        color = _cluster_color(cluster)
+        subclusters = _resplit_cluster_by_rows(cluster)
 
-        if len(found) == 1:
-            key = found[0].group(1)
-            token = "{" + key + "}"
-            matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
-            logger.debug("Cluster at (%d,%d) -> %s (raw ocr='%s')", cx, cy, token, raw_text)
-
-        elif len(found) > 1:
-            logger.warning(
-                "Cluster at (%d,%d) OCR'd as '%s' — contains multiple placeholders, splitting.",
-                cx, cy, raw_text,
+        if len(subclusters) > 1:
+            logger.info(
+                "Cluster at (%d,%d) size %dx%d found nothing on first pass; "
+                "row re-split into %d sub-cluster(s), retrying.",
+                cx, cy, cw, ch, len(subclusters),
             )
-            split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
-            if split:
-                for key, sx, sy, sw, sh in split:
-                    token = "{" + key + "}"
-                    matches.append(PlaceholderMatch(token=token, key=key, x=sx, y=sy, w=sw, h=sh, color=color))
-                    logger.debug("Split cluster -> %s at (%d,%d)", token, sx, sy)
-            else:
-                logger.warning("Could not split cluster '%s'; keeping merged tokens as-is.", raw_text)
-                for m in found:
-                    key = m.group(1)
-                    token = "{" + key + "}"
-                    matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
+            resplit_matches: List[PlaceholderMatch] = []
+            all_resolved = True
+            for sub_idx, sub in enumerate(subclusters):
+                sub_matches = _ocr_cluster(labels, sub, idx, log_prefix=f"[resplit {sub_idx}] ")
+                if sub_matches:
+                    resplit_matches.extend(sub_matches)
+                else:
+                    all_resolved = False
 
-        else:
-            # No valid {KEY} read on first pass — retry once with a looser
-            # single-word mode before giving up, small crops sometimes need it.
-            fallback_text = pytesseract.image_to_string(
-                pil_img, config=f"--psm 8 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
-            ).strip()
-            fallback_found = list(_PLACEHOLDER_RE.finditer(fallback_text))
-            if len(fallback_found) == 1:
-                key = fallback_found[0].group(1)
-                token = "{" + key + "}"
-                matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
-                logger.debug("Cluster at (%d,%d) -> %s (psm8 fallback, raw ocr='%s')", cx, cy, token, fallback_text)
-            else:
-                logger.warning(
-                    "Cluster at (%d,%d) size %dx%d produced no placeholder match "
-                    "(psm7='%s', psm8='%s') — skipping.",
-                    cx, cy, cw, ch, raw_text, fallback_text,
-                )
+            if resplit_matches:
+                matches.extend(resplit_matches)
+                if not all_resolved:
+                    logger.warning(
+                        "Cluster at (%d,%d): row re-split recovered %d of %d sub-cluster(s).",
+                        cx, cy, len(resplit_matches), len(subclusters),
+                    )
+                continue
+
+        # Still nothing: last resort, log both fallback reads for diagnosis.
+        pil_img, _, _ = _render_cluster_canvas(labels, cluster)
+        psm7_text = _ocr_single_token(pil_img, 7)
+        psm8_text = _ocr_single_token(pil_img, 8)
+        logger.warning(
+            "Cluster at (%d,%d) size %dx%d produced no placeholder match "
+            "(psm7='%s', psm8='%s') — skipping. Debug canvas saved under %s/",
+            cx, cy, cw, ch, psm7_text, psm8_text, _DEBUG_DIR,
+        )
 
     logger.info("OCR found %d placeholder(s) in image.", len(matches))
     return matches
