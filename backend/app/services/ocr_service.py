@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -45,47 +45,6 @@ _VERTICAL_ALIGN_FRACTION = 0.8  # max centroid y-difference, in units of avg com
 
 _CANVAS_PAD = 4
 
-# --- NEW: arrow / icon rejection ---
-# Diagrams draw double-headed arrows (<->  or  updown) and solid little box
-# icons in the SAME color as the nearby {KEY} text. Since clustering only
-# looks at color + proximity, those non-text shapes were getting unioned
-# into the placeholder's cluster and corrupting the OCR crop (extra strokes
-# / a filled square where a letter should be). We reject them up front,
-# before they ever enter `_cluster_components`, using simple shape stats:
-#   - arrows: long & thin, mostly empty inside their bbox (low "extent")
-#   - box icons: near-square AND almost completely filled (high "extent")
-# Real glyphs sit between these two profiles, so genuine {KEY} letters are
-# left untouched.
-_ARROW_ASPECT_MIN = 4.0      # long, thin double-headed line
-_ARROW_EXTENT_MAX = 0.30     # very low fill (mostly empty bbox, thin stroke)
-
-_ICON_EXTENT_MIN = 0.78      # solid box icons are almost fully filled
-_ICON_ASPECT_MIN = 0.6       # roughly square...
-_ICON_ASPECT_MAX = 1.6       # ...unlike most letters
-_ICON_MIN_SIZE = 18          # and bigger than a single glyph stroke
-
-
-def _is_arrow_or_icon(w: int, h: int, area: int) -> bool:
-    """Return True if a component's shape stats look like a directional
-    arrow (<->/^v) or a solid box icon rather than a text glyph, so it can
-    be excluded before clustering ever sees it."""
-    if w <= 0 or h <= 0:
-        return False
-    aspect = max(w, h) / max(min(w, h), 1)
-    extent = area / float(w * h)
-
-    # Thin elongated stroke -> arrow
-    if aspect >= _ARROW_ASPECT_MIN and extent <= _ARROW_EXTENT_MAX:
-        return True
-
-    # Near-square, almost fully solid, and larger than a glyph -> box icon
-    if (_ICON_ASPECT_MIN <= (w / max(h, 1)) <= _ICON_ASPECT_MAX
-            and extent >= _ICON_EXTENT_MIN
-            and min(w, h) >= _ICON_MIN_SIZE):
-        return True
-
-    return False
-
 
 @dataclass
 class PlaceholderMatch:
@@ -114,20 +73,13 @@ def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Li
     img_h, img_w = mask.shape[:2]
 
     keep_ids: List[int] = []
-    rejected_shapes = 0
     for label_id in range(1, num_labels):
         x, y, w, h, area = stats[label_id]
         if area < _MIN_COMPONENT_AREA:
             continue
         if w > _MAX_COMPONENT_FRACTION * img_w or h > _MAX_COMPONENT_FRACTION * img_h:
             continue
-        if _is_arrow_or_icon(w, h, area):
-            rejected_shapes += 1
-            continue
         keep_ids.append(label_id)
-
-    if rejected_shapes:
-        logger.debug("Rejected %d component(s) as arrow/icon shapes before clustering.", rejected_shapes)
 
     keep_mask = np.isin(labels, keep_ids) if keep_ids else np.zeros(mask.shape, dtype=bool)
 
@@ -315,16 +267,7 @@ def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> 
     return kept
 
 
-def detect_placeholders(
-    image: np.ndarray, known_keys: Optional[set] = None
-) -> List[PlaceholderMatch]:
-    """known_keys, when given, is the set of output keys this render actually
-    expects (e.g. the keys of the values dict passed to render_template()).
-    Some template PNGs have inconsistently-authored placeholders — most are
-    drawn as '{KEY}' but a few are just a bare 'KEY' with no braces at all
-    (verified by inspecting the source pixels, not an OCR artifact). When the
-    normal '{KEY}' regex finds nothing, a bare OCR read that exactly matches
-    one of known_keys is still accepted, so those assets don't silently fail."""
+def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
     labels, keep_mask, components = _connected_components(image)
 
     debug_mask = np.full_like(image, 255)
@@ -383,26 +326,11 @@ def detect_placeholders(
                 matches.append(PlaceholderMatch(token=token, key=key, x=cx, y=cy, w=cw, h=ch, color=color))
                 logger.debug("Cluster at (%d,%d) -> %s (psm8 fallback, raw ocr='%s')", cx, cy, token, fallback_text)
             else:
-                bare_match = None
-                if known_keys:
-                    for raw in (raw_text, fallback_text):
-                        candidate = raw.strip("{} ").upper()
-                        if candidate in known_keys:
-                            bare_match = candidate
-                            break
-                if bare_match:
-                    token = "{" + bare_match + "}"
-                    matches.append(PlaceholderMatch(token=token, key=bare_match, x=cx, y=cy, w=cw, h=ch, color=color))
-                    logger.debug(
-                        "Cluster at (%d,%d) -> %s (bare key match, no braces in source image, raw ocr='%s')",
-                        cx, cy, token, raw_text,
-                    )
-                else:
-                    logger.warning(
-                        "Cluster at (%d,%d) size %dx%d produced no placeholder match "
-                        "(psm7='%s', psm8='%s') — skipping.",
-                        cx, cy, cw, ch, raw_text, fallback_text,
-                    )
+                logger.warning(
+                    "Cluster at (%d,%d) size %dx%d produced no placeholder match "
+                    "(psm7='%s', psm8='%s') — skipping.",
+                    cx, cy, cw, ch, raw_text, fallback_text,
+                )
 
     logger.info("OCR found %d placeholder(s) in image.", len(matches))
     return matches
