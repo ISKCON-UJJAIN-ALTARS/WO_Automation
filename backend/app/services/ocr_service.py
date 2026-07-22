@@ -30,7 +30,7 @@ _VAL_MIN = 30
 _OPEN_KERNEL_SIZE = 2
 _MIN_COMPONENT_AREA = 2
 _MAX_COMPONENT_FRACTION = 0.15
-_MAX_ASPECT_RATIO = 8.0
+_MAX_CLUSTER_ASPECT_RATIO = 20.0
 
 # Upscale factor applied to each isolated placeholder crop before OCR.
 _OCR_SCALE = 3
@@ -78,9 +78,6 @@ def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Li
         if area < _MIN_COMPONENT_AREA:
             continue
         if w > _MAX_COMPONENT_FRACTION * img_w or h > _MAX_COMPONENT_FRACTION * img_h:
-            continue
-        aspect = max(w, h) / max(min(w, h), 1)
-        if aspect > _MAX_ASPECT_RATIO:
             continue
         keep_ids.append(label_id)
 
@@ -256,6 +253,20 @@ def _split_cluster_into_tokens(
     return results
 
 
+def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> List[List[dict]]:
+    img_h, img_w = img_shape[:2]
+    kept: List[List[dict]] = []
+    for cluster in clusters:
+        _, _, w, h = _cluster_bbox(cluster)
+        if w > _MAX_COMPONENT_FRACTION * img_w or h > _MAX_COMPONENT_FRACTION * img_h:
+            continue
+        aspect = max(w, h) / max(min(w, h), 1)
+        if len(cluster) == 1 and aspect > _MAX_CLUSTER_ASPECT_RATIO:
+            continue
+        kept.append(cluster)
+    return kept
+
+
 def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
     labels, keep_mask, components = _connected_components(image)
 
@@ -264,6 +275,7 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
     cv2.imwrite("generated/ocr_debug.png", debug_mask)
 
     clusters = _cluster_components(components)
+    clusters = _filter_clusters(clusters, image.shape)
     logger.info("Formed %d candidate placeholder cluster(s) from %d component(s).",
                 len(clusters), len(components))
 
