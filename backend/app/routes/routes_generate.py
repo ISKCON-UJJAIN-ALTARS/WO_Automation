@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 
 from app.config.template_config import load_template_config
 from app.schemas.request_models import GenerateRequest, GenerateResponse
-from app.services.image_selector import resolve_image
+from app.services.image_selector import resolve_image, resolve_output_mappings
 from app.services.sheets_service import write_inputs_and_read_outputs
 from app.services.template_service import render_template
 
@@ -61,11 +61,13 @@ def generate_work_order(request: GenerateRequest):
     # ── Step 1: Write inputs → read outputs via Sheets ─────────────────────
     logger.info("Processing template '%s' with inputs: %s", template_key, provided)
 
+    output_mappings = resolve_output_mappings(template_key, cfg, provided)
+
     try:
         output_values = write_inputs_and_read_outputs(
             inputs=provided,
             input_mappings=cfg["input_mappings"],
-            output_mappings=cfg["output_mappings"],
+            output_mappings=output_mappings,
             input_sheet=cfg["input_sheet"],
             output_sheet=cfg["output_sheet"],
         )

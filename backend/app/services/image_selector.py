@@ -55,6 +55,7 @@ def _load_image_variants() -> Dict[str, List[Dict[str, str]]]:
 
 
 _IMAGE_VARIANTS = _load_image_variants()
+_OUTPUT_MAPPINGS_BY_IMAGE: Dict[str, Dict[str, str]] = _IMAGE_VARIANTS.pop("output_mappings_by_image", {})
 
 
 def _normalize_pillar_pattern(value: Any) -> str:
@@ -75,7 +76,10 @@ def effective_steps(level_count: Any, component_box: Any) -> int:
     return max(steps, 0)
 
 
-def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
+def _match_top_row(provided: Dict[str, Any], fields: list) -> Optional[Dict[str, Any]]:
+    """Same match criteria _lookup_top_table always used, factored out so the
+    image lookup and the output-mapping lookup share one source of truth for
+    what counts as 'the same variant'."""
     rows = _IMAGE_VARIANTS.get("top")
     if not rows:
         return None
@@ -97,11 +101,18 @@ def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
             and row.get("pillar_back_pattern") == back_pattern
             and str(row.get("elephant", "no")).lower() == elephant
         ):
-            return _TEMPLATES_DIR / row["image"]
+            return row
     return None
 
 
-def _lookup_side_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
+def _lookup_top_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
+    row = _match_top_row(provided, fields)
+    return (_TEMPLATES_DIR / row["image"]) if row else None
+
+
+def _match_side_row(provided: Dict[str, Any], fields: list) -> Optional[Dict[str, Any]]:
+    """Same match criteria _lookup_side_table always used, factored out for
+    reuse by the output-mapping lookup."""
     rows = _IMAGE_VARIANTS.get("side_cutting")
     if not rows:
         return None
@@ -118,11 +129,18 @@ def _lookup_side_table(provided: Dict[str, Any], fields: list) -> Optional[Path]
 
     for row in rows:
         if row.get("component_box") == component_box and int(row.get("level_count", -1)) == level_count:
-            return _TEMPLATES_DIR / row["image"]
+            return row
     return None
 
 
-def _lookup_level_table(template_key: str, provided: Dict[str, Any], fields: list) -> Optional[Path]:
+def _lookup_side_table(provided: Dict[str, Any], fields: list) -> Optional[Path]:
+    row = _match_side_row(provided, fields)
+    return (_TEMPLATES_DIR / row["image"]) if row else None
+
+
+def _match_level_row(template_key: str, provided: Dict[str, Any], fields: list) -> Optional[Dict[str, Any]]:
+    """Same match criteria _lookup_level_table always used, factored out for
+    reuse by the output-mapping lookup."""
     rows = _IMAGE_VARIANTS.get(template_key)
     if not rows:
         return None
@@ -137,8 +155,56 @@ def _lookup_level_table(template_key: str, provided: Dict[str, Any], fields: lis
 
     for row in rows:
         if int(row.get("level_count", -1)) == level_count:
-            return _TEMPLATES_DIR / row["image"]
+            return row
     return None
+
+
+def _lookup_level_table(template_key: str, provided: Dict[str, Any], fields: list) -> Optional[Path]:
+    row = _match_level_row(template_key, provided, fields)
+    return (_TEMPLATES_DIR / row["image"]) if row else None
+
+
+def resolve_output_mappings(template_key: str, cfg: Dict[str, Any], provided: Dict[str, Any]) -> Dict[str, str]:
+    """Returns the output_mappings dict (Excel cell addresses) to use for this
+    specific request.
+
+    Mirrors resolve_image()'s variant-matching (same rows in image_variants.json,
+    same match fields), but instead of returning an image path, returns that
+    matched row's own "output_mappings" override if it has one.
+
+    Resolution order (first one found wins):
+      1. The matched row's own inline "output_mappings" (rare \u2014 only for a variant
+         that must differ despite sharing an image with others).
+      2. The shared "output_mappings_by_image" table, keyed by that row's "image"
+         value \u2014 the normal case, since variants sharing an image share variables
+         and therefore share cells too, defined once instead of repeated per row.
+      3. The template's static cfg["output_mappings"] \u2014 unchanged prior behavior
+         for any template/variant with no mapping configured yet.
+    """
+    default_mappings = cfg["output_mappings"]
+    rule = cfg.get("image_rule")
+    if not rule:
+        return default_mappings
+
+    rule_type = rule.get("type")
+    fields = rule.get("fields", [])
+
+    row: Optional[Dict[str, Any]] = None
+    if rule_type == "pillar_and_box":
+        row = _match_top_row(provided, fields)
+    elif rule_type == "steps_and_box":
+        row = _match_side_row(provided, fields)
+    elif rule_type == "level_steps":
+        row = _match_level_row(template_key, provided, fields)
+
+    if not row:
+        return default_mappings
+    if row.get("output_mappings"):
+        return row["output_mappings"]
+    shared = _OUTPUT_MAPPINGS_BY_IMAGE.get(row.get("image"))
+    if shared:
+        return shared
+    return default_mappings
 
 
 def _find_top_image(provided: Dict[str, Any], prefix: str, fields: list) -> Optional[Path]:
