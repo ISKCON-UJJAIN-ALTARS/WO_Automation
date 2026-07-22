@@ -238,12 +238,12 @@
   "L1": "AH136",
   "D1": "AH137"
 },
-"step0.png": {
+"side_step0.png": {
   "L": "AS2",
   "H": "AS3"
 },
 
-"step1.png": {
+"side_step1.png": {
   "L": "AX2",
   "H": "AX3",
   "L1": "AX4",
@@ -251,7 +251,7 @@
   "L2": "AX6",
   "H2": "AX7"
 },
-"step2.png": {
+"side_step2.png": {
   "L": "AR10",
   "H": "AR11",
   "L1": "AR12",
@@ -261,7 +261,7 @@
   "L3": "AR16",
   "H3": "AR17"
 },
-"step3.png": {
+"side_step3.png": {
   "L": "AX10",
   "H": "AX11",
   "L1": "AX12",
