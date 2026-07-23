@@ -162,24 +162,44 @@ def list_unresolved(tk: str) -> Dict[str, dict]:
 # Component detection + clustering
 # --------------------------------------------------------------------------
 
-def _colored_mask(image: np.ndarray) -> np.ndarray:
-    """Pixels that count as placeholder 'ink': either clearly colored
-    (saturated, e.g. the red/blue dimension labels) OR dark enough to be
-    black/gray text regardless of saturation (e.g. plain "{L}" style
-    labels). Without the dark branch, black text never produces a single
-    pixel here — grayscale pixels have ~0 saturation no matter how dark —
-    so those placeholders silently never enter the detection pipeline at
-    all (no warning, no review-queue entry, nothing)."""
+def _ink_masks(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Two separate masks: clearly colored (saturated) pixels, and dark
+    (black/gray) pixels regardless of saturation. Kept separate rather than
+    immediately combined because they need different noise handling — see
+    _connected_components."""
     h, s, v = cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
     is_colored = (s > _SAT_THRESHOLD) & (v > _VAL_MIN)
     is_dark = v < _DARK_VAL_MAX
+    return is_colored, is_dark
+
+
+def _colored_mask(image: np.ndarray) -> np.ndarray:
+    """Combined placeholder-ink mask (colored OR dark), for debug
+    visualization only — see _connected_components for why the two
+    channels are opened separately before being combined for real use."""
+    is_colored, is_dark = _ink_masks(image)
     return is_colored | is_dark
 
 
 def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, List[dict]]:
-    mask = _colored_mask(image).astype(np.uint8) * 255
-    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((_OPEN_KERNEL_SIZE,) * 2, np.uint8))
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    is_colored, is_dark = _ink_masks(image)
+
+    colored_u8 = is_colored.astype(np.uint8) * 255
+    colored_opened = cv2.morphologyEx(
+        colored_u8, cv2.MORPH_OPEN, np.ones((_OPEN_KERNEL_SIZE,) * 2, np.uint8)
+    )
+    # Dark/black text is NOT opened: opening erodes anything thinner than
+    # the kernel, and thin glyphs (a digit "1", the vertical stroke of an
+    # "I") are often only 1-2px wide — the opening step was silently
+    # deleting them outright, e.g. "{L1}" losing its "1" (and often most of
+    # "L") entirely, leaving only a lone "}" for OCR to find. Colored
+    # pixels still need it to clean up saturation-threshold noise; black
+    # text doesn't have that noise source, and the existing area/aspect
+    # filters below still catch genuine junk (e.g. border lines).
+    dark_u8 = is_dark.astype(np.uint8) * 255
+
+    mask = cv2.bitwise_or(colored_opened, dark_u8)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     img_h, img_w = mask.shape[:2]
 
     keep_ids = [
@@ -551,14 +571,38 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
     color = _cluster_color(cluster)
     matches: List[PlaceholderMatch] = []
 
+    direct_match: Optional[PlaceholderMatch] = None
+    expected_components = 0
     if len(found) == 1:
         key = found[0].group(1).upper()
+        expected_components = len(found[0].group(1)) + 2  # braces + ~1 component/char
         if _is_allowed_key(key, allowed_keys):
-            matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color, source="direct"))
-            return matches, attempts
+            direct_match = PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color, source="direct")
+        else:
+            logger.info(
+                "%sCluster at (%d,%d): rejected OCR key {%s}; not in output mappings — trying recovery.",
+                tag, cx, cy, key
+            )
+
+    # A cluster with far more components than its single matched key needs
+    # (braces + ~1/char) likely swallowed a second token — e.g. two
+    # placeholders on the same line merged across a separator character
+    # that OCR forced into something confusable, breaking the OTHER
+    # token's brace pairing while this one still read cleanly. Don't
+    # accept the direct match at face value in that case; verify via
+    # row-aware split first so a silently-dropped placeholder gets a
+    # chance to be recovered instead of just disappearing.
+    looks_like_multiple_tokens = direct_match is not None and len(cluster) > expected_components + 2
+
+    if direct_match is not None and not looks_like_multiple_tokens:
+        matches.append(direct_match)
+        return matches, attempts
+
+    if looks_like_multiple_tokens:
         logger.info(
-            "%sCluster at (%d,%d): rejected OCR key {%s}; not in output mappings — trying recovery.",
-            tag, cx, cy, key
+            "%sCluster at (%d,%d): direct read {%s} but %d component(s) (~%d expected) — "
+            "checking for an additional merged token before accepting.",
+            tag, cx, cy, direct_match.key, len(cluster), expected_components,
         )
 
     split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
@@ -569,10 +613,20 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
                 logger.info("%sCluster at (%d,%d): rejected split OCR key {%s}.", tag, cx, cy, key)
                 continue
             matches.append(PlaceholderMatch("{" + key + "}", key, sx, sy, sw, sh, color, source="split"))
+        if direct_match is not None and not any(m.key == direct_match.key for m in matches):
+            # Split didn't reproduce the direct match — keep it too rather
+            # than assume split is strictly better; it isn't guaranteed to.
+            matches.append(direct_match)
         if matches:
             logger.info("%sCluster at (%d,%d): split into %d valid token(s) (raw='%s')",
                         tag, cx, cy, len(matches), raw_text)
             return matches, attempts
+
+    if direct_match is not None:
+        # Split found nothing extra (or nothing at all) — the direct read
+        # stands.
+        matches.append(direct_match)
+        return matches, attempts
 
     if len(found) > 1:
         for m in found:
