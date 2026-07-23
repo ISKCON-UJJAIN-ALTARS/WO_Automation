@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 import cv2
@@ -27,20 +27,25 @@ _CHAR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}_"
 
 # Confirmed real placeholder vocabulary (from the app's actual output
 # mappings). Used as a safety-net allow-list whenever the caller doesn't
-# pass output_mapping through (which is currently always, in production).
-# Without this, allowed_keys stays None and _is_allowed_key accepts any
-# syntactically valid string — which is exactly how arrow/dimension-line
-# OCR noise (misreads like 'J', 'SE', 'DE', 'SEE', 'EE', 'Q', 'Y', '1'...)
-# was slipping through as if it were a genuine placeholder on every
-# template, silently erasing the underlying artwork with nothing to
-# replace it. This is a stopgap: the correct long-term fix is still for
-# the caller to pass the real output_mapping into detect_placeholders().
+# pass output_mapping through. Extended with L1/D1 since those are
+# legitimate keys that were previously missing entirely from detection
+# (see _colored_mask/_dark_mask below) — they'd have been rejected by this
+# allow-list even if OCR had somehow found them.
 _DEFAULT_KNOWN_KEYS: Set[str] = {
-    "A", "B", "W", "S", "N", "FL", "L", "H", "X", "SL", "ML", "SH", "V", "D",
+    "A", "B", "W", "S", "N", "FL", "L", "H", "X", "SL", "ML", "SH", "V", "D", "L1", "D1",
 }
 
 # Detection / clustering tuning
 _SAT_THRESHOLD, _VAL_MIN = 50, 30
+# Black/dark-gray placeholder text (e.g. plain "{L}" style labels, as
+# opposed to the colored dimension labels) has near-zero saturation, so
+# _SAT_THRESHOLD alone never sees it — S = (max-min)/max is ~0 for any
+# grayscale pixel regardless of how dark it is. _DARK_VAL_MAX catches those
+# separately: any sufficiently dark pixel counts as "ink" even with no
+# saturation, which is what black text against a white background looks
+# like. Kept well below the near-white background level so faint
+# anti-aliasing/JPEG noise near white doesn't get swept in.
+_DARK_VAL_MAX = 80
 _OPEN_KERNEL_SIZE, _CLOSE_KERNEL_SIZE = 2, 3
 _MIN_COMPONENT_AREA = 2
 _MAX_COMPONENT_FRACTION = 0.15
@@ -60,10 +65,7 @@ _SIG_BUCKET_PX, _SIG_BUCKET_COLOR = 8, 16
 
 # Confidence ranking for competing matches of the SAME key when the output
 # mapping says only N of them should exist (see _validate_counts). Lower
-# rank == more trustworthy. Cache hits and direct single-brace OCR reads are
-# essentially certain; tier-2 "bare" recovery (no brace evidence at all) is
-# the least trustworthy path in the whole pipeline and is exactly the one
-# that let an arrow-triangle get misread as a real key string in practice.
+# rank == more trustworthy.
 _SOURCE_RANK = {
     "cache": 0,
     "direct": 1,
@@ -87,11 +89,7 @@ class PlaceholderMatch:
 
 
 # --------------------------------------------------------------------------
-# Learning cache: same template renders repeatedly with identical
-# placeholder geometry/color, so once a cluster is resolved (by OCR or a
-# manual apply_correction call) it's cached by a position+size+color
-# signature and never needs OCR again. Unresolved clusters go to a review
-# queue with a saved canvas instead of just a log line.
+# Learning cache
 # --------------------------------------------------------------------------
 
 def _safe_filename(key: str) -> str:
@@ -165,8 +163,17 @@ def list_unresolved(tk: str) -> Dict[str, dict]:
 # --------------------------------------------------------------------------
 
 def _colored_mask(image: np.ndarray) -> np.ndarray:
+    """Pixels that count as placeholder 'ink': either clearly colored
+    (saturated, e.g. the red/blue dimension labels) OR dark enough to be
+    black/gray text regardless of saturation (e.g. plain "{L}" style
+    labels). Without the dark branch, black text never produces a single
+    pixel here — grayscale pixels have ~0 saturation no matter how dark —
+    so those placeholders silently never enter the detection pipeline at
+    all (no warning, no review-queue entry, nothing)."""
     h, s, v = cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
-    return (s > _SAT_THRESHOLD) & (v > _VAL_MIN)
+    is_colored = (s > _SAT_THRESHOLD) & (v > _VAL_MIN)
+    is_dark = v < _DARK_VAL_MAX
+    return is_colored | is_dark
 
 
 def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, List[dict]]:
@@ -281,18 +288,12 @@ def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> 
 
 
 # --------------------------------------------------------------------------
-# Rendering + OCR
+# Output-mapping / allow-list validation
 # --------------------------------------------------------------------------
 
 def _normalize_output_mapping(
     output_mapping: Optional[Dict[str, object]]
 ) -> Tuple[Optional[Set[str]], Dict[str, int]]:
-    """Normalize the output mapping supplied by the generation workflow.
-
-    The OCR service should only accept placeholder keys that are actually
-    present in the current output mapping. Values are treated as expected
-    occurrence counts when they can be converted to non-negative integers.
-    """
     if not output_mapping:
         return None, {}
 
@@ -303,9 +304,7 @@ def _normalize_output_mapping(
         key = str(raw_key).strip().upper()
         if not _LOOSE_KEY_RE.match(key):
             continue
-
         allowed_keys.add(key)
-
         try:
             count = int(raw_count)
             if count >= 0:
@@ -317,19 +316,14 @@ def _normalize_output_mapping(
 
 
 def _is_allowed_key(key: str, allowed_keys: Optional[Set[str]]) -> bool:
-    """Return True when key is valid for this generation request.
-
-    If no output mapping is supplied, fall back to the confirmed known
-    placeholder vocabulary rather than allowing anything through — see
-    the note on _DEFAULT_KNOWN_KEYS for why "no restriction" is unsafe.
-    """
+    """If no output mapping is supplied, fall back to the confirmed known
+    placeholder vocabulary rather than allowing anything through."""
     normalized = key.strip().upper()
     effective_keys = allowed_keys if allowed_keys is not None else _DEFAULT_KNOWN_KEYS
     return normalized in effective_keys
 
 
 def _component_features(component: dict) -> Tuple[float, float]:
-    """Return aspect ratio and fill ratio for a connected component."""
     w = max(int(component["w"]), 1)
     h = max(int(component["h"]), 1)
     area = max(int(component["area"]), 0)
@@ -339,46 +333,21 @@ def _component_features(component: dict) -> Tuple[float, float]:
 
 
 def _is_obvious_graphic_component(component: dict) -> bool:
-    """Reject components that are overwhelmingly likely to be drawing graphics.
-
-    Templates contain blue dimension arrows, long measurement lines and filled
-    blue rectangles in addition to blue placeholder text. These components
-    should not enter the OCR clustering pipeline.
-
-    The thresholds are intentionally conservative: only very obvious graphics
-    are rejected here. Text-like components remain available for OCR.
-
-    NOTE: this only catches the *shaft* of a dimension arrow (long thin
-    strokes) or a curved leader line. Arrowheads themselves are small,
-    roughly square, ~50% filled triangles that don't trip any of these
-    three rules on their own — see _mark_arrow_satellites, which is the
-    pass that actually catches those by proximity to a flagged shaft.
-    """
+    """Reject components overwhelmingly likely to be drawing graphics
+    (dimension arrows, leader lines, filled rectangles) rather than text.
+    Conservative on purpose — only very obvious graphics are rejected;
+    arrowheads that slip through here are caught relationally by
+    _mark_arrow_satellites instead."""
     aspect_ratio, fill_ratio = _component_features(component)
     w = int(component["w"])
     h = int(component["h"])
 
-    # Long, thin strokes are normally dimension lines/arrows.
     if aspect_ratio >= 12.0:
         return True
 
-    # Curved dimension-leader arrows aren't straight, so their bounding-box
-    # aspect ratio can look modest even though the stroke itself is thin.
-    # A genuine glyph always inks a meaningful fraction of its own bbox; a
-    # curvy line spread across a box this size does not. Without this,
-    # curved arrows slip through, then either fuse with an adjacent
-    # placeholder's text component during clustering (contaminating it) or
-    # get OCR-misread as a stray bare letter by tier-2 recovery.
     if w >= 15 and h >= 15 and fill_ratio <= 0.12:
         return True
 
-    # Large solid regions are normally filled drawing shapes rather than
-    # text. Genuine filled rectangles (the pillar boxes) measure a clean
-    # 1.000 fill ratio; bold glyphs with closed loops (e.g. 'B', '8', '0')
-    # can legitimately reach ~0.7-0.8 ink coverage in their own tight bbox,
-    # so the threshold sits well above that to avoid misclassifying bold
-    # text as a filled shape (which was swallowing real placeholder
-    # letters, e.g. a 'B' at fill=0.706 was being dropped entirely).
     if w >= 12 and h >= 8 and fill_ratio >= 0.92:
         return True
 
@@ -388,25 +357,9 @@ def _is_obvious_graphic_component(component: dict) -> bool:
 def _mark_arrow_satellites(
     all_components: List[dict], graphic_ids: Set[int], dilate_px: int = _ARROW_SATELLITE_DILATE_PX
 ) -> Set[int]:
-    """Catch arrowheads that _is_obvious_graphic_component misses on its own.
-
-    An arrowhead is small, roughly square, and only ~50% filled — it doesn't
-    trip the aspect-ratio, curved-leader, or filled-rectangle rules above.
-    But it is always physically attached to (or immediately touching) a
-    shaft/line component that DID get flagged, and it shares that shaft's
-    color. So instead of trying to classify the head's shape in isolation,
-    classify it relationally: any non-graphic component within dilate_px of
-    an already-flagged same-color graphic component is almost certainly
-    that arrow's head (or a stray line fragment), not placeholder text.
-
-    Without this, an arrowhead survives as an ordinary "text" component,
-    gets fused into the nearest same-color {KEY} label by the normal
-    clustering pass (same color, close, vertically aligned), and either:
-      (a) corrupts that real placeholder into an unreadable blob, or
-      (b) sits alone and gets hallucinated by tier-2 bare-OCR recovery into
-          a fake key string that can collide with a real one (e.g. an
-          arrowhead misread as 'S' when {S} is a legitimate key elsewhere).
-    """
+    """Catch arrowheads that _is_obvious_graphic_component misses: small,
+    ~50% filled, roughly square, physically touching an already-flagged
+    same-color shaft/line."""
     graphics = [c for c in all_components if c["label_id"] in graphic_ids]
     if not graphics:
         return set()
@@ -426,48 +379,11 @@ def _mark_arrow_satellites(
     return extra
 
 
-def _validate_matches(
-    matches: List["PlaceholderMatch"],
-    allowed_keys: Optional[Set[str]],
-    tag: str = "",
-) -> List["PlaceholderMatch"]:
-    """Keep only matches whose keys are valid for this generation request."""
-    valid = []
-
-    for match in matches:
-        key = str(match.key or "").strip().upper()
-        if not _is_allowed_key(key, allowed_keys):
-            logger.info(
-                "%sRejected OCR candidate {%s}: key is not present in current "
-                "output mappings.",
-                tag,
-                key,
-            )
-            continue
-
-        match.key = key
-        match.token = "{" + key + "}"
-        valid.append(match)
-
-    return valid
-
-
 def _validate_counts(
     matches: List[PlaceholderMatch], expected_counts: Dict[str, int]
 ) -> List[PlaceholderMatch]:
-    """Trim excess matches for a key beyond what the output mapping expects.
-
-    A candidate string being a VALID key (_is_allowed_key) doesn't mean this
-    PARTICULAR instance is real — noise can coincidentally OCR into a string
-    that matches a real key elsewhere in the vocabulary (this is how an
-    arrow-triangle got read as 'S' in one template: 'S' is a genuine key, so
-    the allow-list check passed, even though there was no {S} glyph at that
-    location). If the mapping says a key should appear N times and we have
-    more than N candidates for it, the lowest-confidence ones (by `source`,
-    see _SOURCE_RANK) are the ones most likely to be exactly that kind of
-    false positive, so they're dropped rather than the higher-confidence
-    ones.
-    """
+    """Trim excess matches for a key beyond what the output mapping
+    expects, dropping the lowest-confidence ones first (see _SOURCE_RANK)."""
     if not expected_counts:
         return matches
 
@@ -491,9 +407,12 @@ def _validate_counts(
                 "match at (%d,%d) [source=%s].",
                 key, len(group), expected, d.x, d.y, d.source,
             )
-
     return keep
 
+
+# --------------------------------------------------------------------------
+# Rendering + OCR
+# --------------------------------------------------------------------------
 
 def _render_cluster_canvas(labels: np.ndarray, cluster: List[dict], pad: int = _CANVAS_PAD
                             ) -> Tuple[Image.Image, int, int]:
@@ -534,10 +453,6 @@ def _ocr_text(pil_img: Image.Image, psm: int) -> str:
 
 
 def _ocr_with_fallbacks(pil_img: Image.Image) -> Tuple[str, int, List[Tuple[int, str]]]:
-    """Try psm 7 (line) -> 8 (word) -> 6 (block) -> 10 (single char),
-    stopping at the first clean single {KEY} match. Returns every attempt
-    made so callers can reuse them for recovery/logging without more
-    Tesseract subprocess calls."""
     attempts = []
     for psm in (7, 8, 6, 10):
         text = _ocr_text(pil_img, psm)
@@ -548,8 +463,6 @@ def _ocr_with_fallbacks(pil_img: Image.Image) -> Tuple[str, int, List[Tuple[int,
 
 
 def _extract_key_loose(raw_text: str) -> Optional[str]:
-    """Tier 1: braces got garbled (e.g. '{A{') but inner text is clean.
-    Requires a brace character present as evidence this was a placeholder."""
     if "{" not in raw_text and "}" not in raw_text:
         return None
     stripped = raw_text.replace("{", "").replace("}", "").strip()
@@ -557,9 +470,6 @@ def _extract_key_loose(raw_text: str) -> Optional[str]:
 
 
 def _extract_key_bare(psm: int, text: str) -> Optional[str]:
-    """Tier 2: no brace evidence at all — only for tiny clusters whose
-    brace glyphs likely never survived the color threshold. Only trusts
-    single-word/single-char psm modes and rejects underscore-only noise."""
     if psm not in _TIER2_TRUSTED_PSMS:
         return None
     stripped = text.strip()
@@ -569,8 +479,6 @@ def _extract_key_bare(psm: int, text: str) -> Optional[str]:
 
 
 def _char_boxes(pil_crop: Image.Image) -> List[Tuple[str, int, int, int, int]]:
-    """Per-character boxes via sparse-text mode (psm 11, no single-line
-    assumption) so overlapping/stacked placeholders can be separated."""
     img_w, img_h = pil_crop.size
     boxes_str = pytesseract.image_to_boxes(
         pil_crop, config=f"--psm 11 -c tessedit_char_whitelist={_CHAR_WHITELIST}"
@@ -609,8 +517,6 @@ def _group_into_rows(entries: List[Tuple[str, int, int, int, int]]) -> List[List
 
 def _split_cluster_into_tokens(pil_img: Image.Image, x0: int, y0: int, scale: int
                                 ) -> List[Tuple[str, int, int, int, int]]:
-    """Row-aware split for a cluster containing >1 (or misread) {KEY}s —
-    e.g. two same-colored, stacked, or overlapping placeholders."""
     entries = _char_boxes(pil_img)
     if not entries:
         return []
@@ -632,8 +538,9 @@ def _split_cluster_into_tokens(pil_img: Image.Image, x0: int, y0: int, scale: in
 def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "",
                   allowed_keys: Optional[Set[str]] = None
                   ) -> Tuple[List[PlaceholderMatch], List[Tuple[int, str]]]:
-    """Full pipeline for one cluster: flat OCR -> row-aware split ->
-    brace-garbled recovery -> no-brace recovery."""
+    """Full pipeline for one cluster: direct OCR -> row-aware split ->
+    merged multi-match -> tier-1 brace-garbled recovery -> tier-2 bare
+    recovery (requires psm 8/10 agreement)."""
     pil_img, x0, y0 = _render_cluster_canvas(labels, cluster)
     if _DEBUG:
         _save_canvas(pil_img, os.path.join(_DEBUG_DIR, f"cluster_{idx:02d}_{x0}_{y0}{'_' + tag if tag else ''}.png"))
@@ -646,67 +553,36 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
 
     if len(found) == 1:
         key = found[0].group(1).upper()
-        if not _is_allowed_key(key, allowed_keys):
-            logger.info(
-                "%sCluster at (%d,%d): rejected OCR key {%s}; "
-                "not present in current output mappings — trying recovery.",
-                tag, cx, cy, key
-            )
-            # Fall through to split/merged/tier-1/tier-2 recovery below
-            # instead of giving up immediately: a rejected direct read
-            # (e.g. Tesseract confusing 'S' for '8') still deserves a
-            # second chance from the other passes in `attempts`.
-        else:
+        if _is_allowed_key(key, allowed_keys):
             matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color, source="direct"))
             return matches, attempts
+        logger.info(
+            "%sCluster at (%d,%d): rejected OCR key {%s}; not in output mappings — trying recovery.",
+            tag, cx, cy, key
+        )
 
     split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
     if split:
         for key, sx, sy, sw, sh in split:
             key = key.upper()
             if not _is_allowed_key(key, allowed_keys):
-                logger.info(
-                    "%sCluster at (%d,%d): rejected split OCR key {%s}; "
-                    "not present in current output mappings.",
-                    tag, cx, cy, key
-                )
+                logger.info("%sCluster at (%d,%d): rejected split OCR key {%s}.", tag, cx, cy, key)
                 continue
-
-            matches.append(
-                PlaceholderMatch(
-                    "{" + key + "}", key, sx, sy, sw, sh, color, source="split"
-                )
-            )
-
+            matches.append(PlaceholderMatch("{" + key + "}", key, sx, sy, sw, sh, color, source="split"))
         if matches:
-            logger.info(
-                "%sCluster at (%d,%d): split into %d valid token(s) (raw='%s')",
-                tag, cx, cy, len(matches), raw_text
-            )
+            logger.info("%sCluster at (%d,%d): split into %d valid token(s) (raw='%s')",
+                        tag, cx, cy, len(matches), raw_text)
             return matches, attempts
 
     if len(found) > 1:
         for m in found:
             key = m.group(1).upper()
             if not _is_allowed_key(key, allowed_keys):
-                logger.info(
-                    "%sCluster at (%d,%d): rejected merged OCR key {%s}; "
-                    "not present in current output mappings.",
-                    tag, cx, cy, key
-                )
+                logger.info("%sCluster at (%d,%d): rejected merged OCR key {%s}.", tag, cx, cy, key)
                 continue
-
-            matches.append(
-                PlaceholderMatch(
-                    "{" + key + "}", key, cx, cy, cw, ch, color, source="merged"
-                )
-            )
-
+            matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color, source="merged"))
         if matches:
-            logger.warning(
-                "%sCluster at (%d,%d): couldn't split '%s', kept valid matches.",
-                tag, cx, cy, raw_text
-            )
+            logger.warning("%sCluster at (%d,%d): couldn't split '%s', kept valid matches.", tag, cx, cy, raw_text)
             return matches, attempts
 
     for _, text in attempts:
@@ -715,54 +591,23 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
             continue
         loose = loose.upper()
         if _is_allowed_key(loose, allowed_keys):
-            matches.append(
-                PlaceholderMatch(
-                    "{" + loose + "}", loose, cx, cy, cw, ch, color, source="tier1"
-                )
-            )
-            logger.info(
-                "%sCluster at (%d,%d): tier-1 recovery '%s' -> {%s}",
-                tag, cx, cy, text, loose
-            )
+            matches.append(PlaceholderMatch("{" + loose + "}", loose, cx, cy, cw, ch, color, source="tier1"))
+            logger.info("%sCluster at (%d,%d): tier-1 recovery '%s' -> {%s}", tag, cx, cy, text, loose)
             return matches, attempts
-
-        logger.info(
-            "%sCluster at (%d,%d): rejected tier-1 recovery {%s}; "
-            "not present in current output mappings.",
-            tag, cx, cy, loose
-        )
+        logger.info("%sCluster at (%d,%d): rejected tier-1 recovery {%s}.", tag, cx, cy, loose)
 
     cluster_area = sum(int(c.get("area", 0)) for c in cluster)
     cluster_fill = cluster_area / float(max(cw * ch, 1))
     tier2_shape_ok = not (cw >= 15 and ch >= 15 and cluster_fill <= 0.12)
     if not tier2_shape_ok:
-        logger.info(
-            "%sCluster at (%d,%d): skipping tier-2 bare recovery — shape %dx%d "
-            "(fill %.2f) looks like a line/arrow, not text.",
-            tag, cx, cy, cw, ch, cluster_fill
-        )
+        logger.info("%sCluster at (%d,%d): skipping tier-2 — shape %dx%d (fill %.2f) looks like a line/arrow.",
+                    tag, cx, cy, cw, ch, cluster_fill)
     elif len(cluster) != 1:
-        # A cluster fused from more than one connected component (e.g. a
-        # real glyph plus a stray arrowhead/line fragment that slipped past
-        # the graphic filters) is exactly the shape that produces
-        # hallucinated single-letter reads with no real brace evidence.
-        # Tier-2 has no brace to anchor on at all, so it's only trusted for
-        # the simplest possible case: one isolated component.
-        logger.info(
-            "%sCluster at (%d,%d): skipping tier-2 bare recovery — cluster has "
-            "%d component(s), not a single isolated glyph.",
-            tag, cx, cy, len(cluster)
-        )
+        logger.info("%sCluster at (%d,%d): skipping tier-2 — %d component(s), not a single glyph.",
+                    tag, cx, cy, len(cluster))
         tier2_shape_ok = False
 
     if tier2_shape_ok:
-        # Require BOTH trusted psm modes (8 and 10) to independently read the
-        # exact same bare string before trusting it. A real isolated glyph
-        # reads consistently across single-word and single-char modes; noise
-        # (e.g. an arrowhead triangle) tends to be far less stable across
-        # psm modes, and requiring agreement is cheap insurance against the
-        # kind of collision that let one arrow get read as a real key ('S')
-        # elsewhere in this same pipeline.
         bare_by_psm: Dict[int, str] = {}
         for psm, text in attempts:
             bare = _extract_key_bare(psm, text)
@@ -777,33 +622,15 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
         if agreed:
             bare = bare_by_psm[_TIER2_TRUSTED_PSMS[0]]
             if _is_allowed_key(bare, allowed_keys):
-                matches.append(
-                    PlaceholderMatch(
-                        "{" + bare + "}", bare, cx, cy, cw, ch, color, source="tier2"
-                    )
-                )
-                logger.info(
-                    "%sCluster at (%d,%d): tier-2 bare recovery, psm%s agree -> {%s}",
-                    tag, cx, cy, _TIER2_TRUSTED_PSMS, bare
-                )
+                matches.append(PlaceholderMatch("{" + bare + "}", bare, cx, cy, cw, ch, color, source="tier2"))
+                logger.info("%sCluster at (%d,%d): tier-2 bare recovery, psm%s agree -> {%s}",
+                            tag, cx, cy, _TIER2_TRUSTED_PSMS, bare)
                 return matches, attempts
-
-            logger.info(
-                "%sCluster at (%d,%d): rejected tier-2 recovery {%s}; "
-                "not present in current output mappings.",
-                tag, cx, cy, bare
-            )
+            logger.info("%sCluster at (%d,%d): rejected tier-2 recovery {%s}.", tag, cx, cy, bare)
         elif bare_by_psm:
-            logger.info(
-                "%sCluster at (%d,%d): tier-2 bare recovery inconsistent across psm modes (%s) "
-                "— discarding as unreliable.",
-                tag, cx, cy, bare_by_psm
-            )
+            logger.info("%sCluster at (%d,%d): tier-2 inconsistent across psm modes (%s) — discarding.",
+                        tag, cx, cy, bare_by_psm)
 
-    # IMPORTANT: Do not use bare OCR as an automatic placeholder detector.
-    # Without brace evidence, arrows, dimension labels, line fragments and
-    # other graphics frequently become false positives such as {1}, {T},
-    # {HIM}, {CE}, {8} and {J}. Such candidates are sent to review instead.
     return matches, attempts
 
 
@@ -817,23 +644,14 @@ def detect_placeholders(
     output_mapping: Optional[Dict[str, object]] = None,
 ) -> List[PlaceholderMatch]:
     """Detect {KEY} placeholders in a rendered template image, using and
-    updating the persistent per-template learning cache. template_key
-    defaults to a hash of the image bytes, so repeat renders of the same
-    template automatically reuse everything already learned about it."""
+    updating the persistent per-template learning cache."""
     tk = template_key or _template_key_for_image(image)
     allowed_keys, expected_counts = _normalize_output_mapping(output_mapping)
 
     if allowed_keys is not None:
-        logger.info(
-            "OCR constrained to %d placeholder key(s) from output mappings: %s",
-            len(allowed_keys),
-            ", ".join(sorted(allowed_keys)),
-        )
+        logger.info("OCR constrained to %d placeholder key(s): %s", len(allowed_keys), ", ".join(sorted(allowed_keys)))
         if expected_counts:
-            logger.info(
-                "Expected placeholder counts: %s",
-                expected_counts,
-            )
+            logger.info("Expected placeholder counts: %s", expected_counts)
 
     cache = _load_json(_cache_path(tk))
     review = _load_json(_review_path(tk))
@@ -841,15 +659,9 @@ def detect_placeholders(
 
     labels, keep_mask, components = _connected_components(image)
 
-    # Keep the original label image intact, but exclude obvious drawing
-    # graphics from OCR candidate clustering.
     graphic_components = [c for c in components if _is_obvious_graphic_component(c)]
     remaining = [c for c in components if not _is_obvious_graphic_component(c)]
 
-    # Second pass: catch arrowheads and stray line fragments that don't look
-    # like graphics on their own but sit right next to (and share the color
-    # of) a component that already got flagged as one. See
-    # _mark_arrow_satellites for why this can't be done shape-only.
     graphic_ids = {c["label_id"] for c in graphic_components}
     satellite_ids = _mark_arrow_satellites(components, graphic_ids)
     if satellite_ids:
@@ -857,13 +669,9 @@ def detect_placeholders(
         remaining = [c for c in remaining if c["label_id"] not in satellite_ids]
 
     components = remaining
-
     if graphic_components:
-        logger.info(
-            "Filtered %d obvious graphic component(s) before OCR clustering "
-            "(including %d arrow-satellite component(s)).",
-            len(graphic_components), len(satellite_ids),
-        )
+        logger.info("Filtered %d obvious graphic component(s) (including %d arrow-satellite).",
+                    len(graphic_components), len(satellite_ids))
 
     if _DEBUG:
         debug_mask = np.full_like(image, 255)
@@ -895,27 +703,13 @@ def detect_placeholders(
         cached = cache.get(sig)
         if cached:
             cached_key = str(cached.get("key", "")).upper()
-
-            # Never reuse a cached result that is impossible for the current
-            # output mapping. This also protects against stale/wrong OCR cache
-            # entries from an earlier version of the detector.
             if not _is_allowed_key(cached_key, allowed_keys):
-                logger.info(
-                    "Ignoring cached key {%s} at (%d,%d): not present in "
-                    "current output mappings.",
-                    cached_key, cx, cy
-                )
+                logger.info("Ignoring cached key {%s} at (%d,%d): not in output mappings.", cached_key, cx, cy)
                 cached = None
             else:
                 cached["hits"] = cached.get("hits", 0) + 1
                 cache_dirty = True
-                matches.append(
-                    PlaceholderMatch(
-                        "{" + cached_key + "}",
-                        cached_key,
-                        cx, cy, cw, ch, color, source="cache"
-                    )
-                )
+                matches.append(PlaceholderMatch("{" + cached_key + "}", cached_key, cx, cy, cw, ch, color, source="cache"))
                 cache_hits += 1
                 continue
 
@@ -928,8 +722,7 @@ def detect_placeholders(
 
         subclusters = _resplit_cluster_by_rows(cluster)
         if len(subclusters) > 1:
-            logger.info("Cluster at (%d,%d) %dx%d: row re-split into %d sub-cluster(s).",
-                        cx, cy, cw, ch, len(subclusters))
+            logger.info("Cluster at (%d,%d) %dx%d: row re-split into %d sub-cluster(s).", cx, cy, cw, ch, len(subclusters))
             resplit_matches, resolved_n = [], 0
             for si, sub in enumerate(subclusters):
                 sub_matches, _ = _ocr_cluster(labels, sub, idx, tag=f"[resplit {si}] ", allowed_keys=allowed_keys)
@@ -954,9 +747,6 @@ def detect_placeholders(
                        "ocr_attempts": attempt_summary, "canvas_path": canvas_path, "last_seen": time.time()}
         review_dirty = True
 
-    # Final backstop: even a syntactically-valid, allow-listed key can be a
-    # false positive if it's an EXTRA instance beyond what the mapping says
-    # should exist (see _validate_counts docstring for the motivating case).
     matches = _validate_counts(matches, expected_counts)
 
     if cache_dirty:
