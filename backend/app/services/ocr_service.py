@@ -1,7 +1,10 @@
+import hashlib
+import json
 import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -78,6 +81,113 @@ _LOOSE_KEY_RE = re.compile(r"^[A-Z0-9_]{1,8}$")
 # above since it operates on Tesseract's own character boxes, not our
 # connected components.
 _CHAR_ROW_ALIGN_FRACTION = 0.6
+
+
+# --------------------------------------------------------------------------
+# Learning cache
+#
+# The same template file is rendered repeatedly with identical placeholder
+# geometry/colors every time (only the substituted values change). There's
+# no need to re-solve OCR for a cluster we've already resolved for this
+# exact template. Each cluster gets a stable signature (bucketed position +
+# size + color, tolerant to a few pixels of jitter) and, once resolved
+# (either by a clean OCR read or a manual correction), that mapping is
+# persisted to disk and reused on every future run — skipping OCR for that
+# cluster entirely. Clusters that fail every OCR strategy are written to a
+# "needs review" queue instead of just a warning that scrolls past in logs,
+# so a human can supply the correct key once via apply_correction() and
+# never see that failure again.
+# --------------------------------------------------------------------------
+
+_CACHE_DIR = "generated/ocr_cache"
+_SIG_BUCKET_PX = 8     # position/size bucketing, in original-image pixels
+_SIG_BUCKET_COLOR = 16  # color channel bucketing (0-255 -> 16 buckets)
+
+
+def _safe_filename(key: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+
+
+def _template_key_for_image(image: np.ndarray) -> str:
+    """Stable identity for a template image. Same base template file ->
+    same bytes -> same key, regardless of what filename it was loaded
+    from, so the cache stays valid even if the template gets renamed or
+    is referenced from multiple paths."""
+    return hashlib.sha1(image.tobytes()).hexdigest()[:16]
+
+
+def _cache_path(template_key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"{_safe_filename(template_key)}.json")
+
+
+def _review_queue_path(template_key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"{_safe_filename(template_key)}.review.json")
+
+
+def _cluster_signature(x: int, y: int, w: int, h: int, color: Tuple[int, int, int]) -> str:
+    bx = (x // _SIG_BUCKET_PX) * _SIG_BUCKET_PX
+    by = (y // _SIG_BUCKET_PX) * _SIG_BUCKET_PX
+    bw = (w // _SIG_BUCKET_PX) * _SIG_BUCKET_PX
+    bh = (h // _SIG_BUCKET_PX) * _SIG_BUCKET_PX
+    bc = tuple(c // _SIG_BUCKET_COLOR for c in color)
+    return f"{bx}_{by}_{bw}_{bh}_{bc[0]}_{bc[1]}_{bc[2]}"
+
+
+def _load_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception:
+        logger.exception("Failed to load %s; treating as empty.", path)
+        return {}
+
+
+def _save_json_atomic(path: str, data: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except Exception:
+        logger.exception("Failed to save %s", path)
+
+
+def apply_correction(
+    template_key: str, x: int, y: int, w: int, h: int, color: Tuple[int, int, int], key: str
+) -> None:
+    """Manually teach the cache the correct key for a cluster that OCR
+    could not resolve (or resolved wrong). Use the (x, y, w, h, color)
+    reported in a 'needs review' entry or a PlaceholderMatch. Persists
+    immediately; every future detect_placeholders() call for this same
+    template will use this key for that cluster without touching OCR."""
+    sig = _cluster_signature(x, y, w, h, color)
+    cache = _load_json(_cache_path(template_key))
+    cache[sig] = {
+        "key": key.upper(),
+        "source": "manual",
+        "corrected_at": time.time(),
+        "hits": 0,
+    }
+    _save_json_atomic(_cache_path(template_key), cache)
+    logger.info("Manual correction saved for template %s, signature %s -> {%s}", template_key, sig, key)
+
+    # A manual correction resolves the failure — drop it from the review
+    # queue if it's sitting there.
+    review_path = _review_queue_path(template_key)
+    queue = _load_json(review_path)
+    if sig in queue:
+        del queue[sig]
+        _save_json_atomic(review_path, queue)
+
+
+def list_unresolved(template_key: str) -> Dict[str, dict]:
+    """Return the current 'needs review' queue for a template: signature
+    -> {bbox, color, ocr attempts, debug canvas path}. Empty if everything
+    has been resolved."""
+    return _load_json(_review_queue_path(template_key))
 
 
 @dataclass
@@ -269,6 +379,22 @@ def _dump_debug_canvas(pil_img: Image.Image, idx: int, x0: int, y0: int, tag: st
         pil_img.save(path)
     except Exception:
         logger.exception("Failed to write debug cluster canvas (idx=%d)", idx)
+
+
+def _save_review_canvas(pil_img: Image.Image, template_key: str, sig: str) -> str:
+    """Unlike _dump_debug_canvas, this always saves (not gated behind
+    OCR_DEBUG) because it backs the persistent review queue that a human
+    needs to actually look at to call apply_correction(). Returns the
+    saved path so it can be recorded alongside the queue entry."""
+    review_dir = os.path.join(_CACHE_DIR, _safe_filename(template_key), "review_canvases")
+    try:
+        os.makedirs(review_dir, exist_ok=True)
+        path = os.path.join(review_dir, f"{sig}.png")
+        pil_img.save(path)
+        return path
+    except Exception:
+        logger.exception("Failed to save review canvas for signature %s", sig)
+        return ""
 
 
 def _ocr_single_token(pil_img: Image.Image, psm: int) -> str:
@@ -508,7 +634,23 @@ def _ocr_cluster(
     return matches, attempts  # empty: caller decides what to try next
 
 
-def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
+def detect_placeholders(image: np.ndarray, template_key: Optional[str] = None) -> List[PlaceholderMatch]:
+    """Detect {KEY} placeholders in a rendered template image.
+
+    template_key identifies which learning cache to use. If omitted, it's
+    derived from the image bytes themselves, so re-renders of the exact
+    same template automatically reuse whatever this function (or a manual
+    apply_correction() call) has already learned about that template's
+    placeholders — without needing the caller to pass anything special.
+    """
+    if template_key is None:
+        template_key = _template_key_for_image(image)
+
+    cache = _load_json(_cache_path(template_key))
+    review_queue = _load_json(_review_queue_path(template_key))
+    cache_dirty = False
+    review_dirty = False
+
     labels, keep_mask, components = _connected_components(image)
 
     if _DEBUG:
@@ -523,18 +665,69 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
                 len(clusters), len(components))
 
     matches: List[PlaceholderMatch] = []
+    cache_hits = 0
+
+    def _try_cache(cx: int, cy: int, cw: int, ch: int, color: Tuple[int, int, int]) -> Optional[PlaceholderMatch]:
+        sig = _cluster_signature(cx, cy, cw, ch, color)
+        entry = cache.get(sig)
+        if entry is None:
+            return None
+        nonlocal cache_dirty
+        entry["hits"] = entry.get("hits", 0) + 1
+        cache_dirty = True
+        key = entry["key"]
+        return PlaceholderMatch(token="{" + key + "}", key=key, x=cx, y=cy, w=cw, h=ch, color=color)
+
+    def _record_resolved(cx: int, cy: int, cw: int, ch: int, color: Tuple[int, int, int], key: str) -> None:
+        nonlocal cache_dirty
+        sig = _cluster_signature(cx, cy, cw, ch, color)
+        # Don't clobber an existing manual correction with a fresh OCR read.
+        if cache.get(sig, {}).get("source") == "manual":
+            return
+        cache[sig] = {"key": key, "source": "ocr_auto", "hits": 1}
+        cache_dirty = True
+        # A resolved cluster is no longer unresolved.
+        sig_in_queue = sig in review_queue
+        if sig_in_queue:
+            del review_queue[sig]
+            nonlocal review_dirty
+            review_dirty = True
+
+    def _record_unresolved(labels_, cluster_, cx: int, cy: int, cw: int, ch: int,
+                            color: Tuple[int, int, int], attempt_summary: str) -> None:
+        nonlocal review_dirty
+        sig = _cluster_signature(cx, cy, cw, ch, color)
+        pil_img, _, _ = _render_cluster_canvas(labels_, cluster_)
+        canvas_path = _save_review_canvas(pil_img, template_key, sig)
+        review_queue[sig] = {
+            "x": cx, "y": cy, "w": cw, "h": ch, "color": list(color),
+            "ocr_attempts": attempt_summary,
+            "canvas_path": canvas_path,
+            "last_seen": time.time(),
+        }
+        review_dirty = True
 
     for idx, cluster in enumerate(clusters):
+        cx, cy, cw, ch = _cluster_bbox(cluster)
+        color = _cluster_color(cluster)
+
+        cached_match = _try_cache(cx, cy, cw, ch, color)
+        if cached_match is not None:
+            matches.append(cached_match)
+            cache_hits += 1
+            continue
+
         cluster_matches, attempts = _ocr_cluster(labels, cluster, idx)
 
         if cluster_matches:
             matches.extend(cluster_matches)
+            if len(cluster_matches) == 1:
+                _record_resolved(cx, cy, cw, ch, color, cluster_matches[0].key)
             continue
 
         # First pass found nothing. Check whether this cluster looks like
         # it fused multiple rows/tokens together geometrically and retry
         # with a much stricter row-aware component re-split.
-        cx, cy, cw, ch = _cluster_bbox(cluster)
         subclusters = _resplit_cluster_by_rows(cluster)
 
         if len(subclusters) > 1:
@@ -550,6 +743,9 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
                 if sub_matches:
                     resolved_count += 1
                     resplit_matches.extend(sub_matches)
+                    if len(sub_matches) == 1:
+                        sx, sy, sw, sh = _cluster_bbox(sub)
+                        _record_resolved(sx, sy, sw, sh, _cluster_color(sub), sub_matches[0].key)
 
             if resplit_matches:
                 matches.extend(resplit_matches)
@@ -560,13 +756,29 @@ def detect_placeholders(image: np.ndarray) -> List[PlaceholderMatch]:
                     )
                 continue
 
-        # Still nothing: log using attempts already made, no extra OCR calls.
+        # Still nothing: log using attempts already made, no extra OCR
+        # calls, and queue it for a one-time manual correction so it never
+        # has to be blindly re-attempted on every future render.
         attempt_summary = ", ".join(f"psm{p}='{t}'" for p, t in attempts)
         logger.warning(
-            "Cluster at (%d,%d) size %dx%d produced no placeholder match (%s) — skipping.%s",
-            cx, cy, cw, ch, attempt_summary,
-            f" Debug canvas saved under {_DEBUG_DIR}/" if _DEBUG else "",
+            "Cluster at (%d,%d) size %dx%d produced no placeholder match (%s) — skipping. "
+            "Queued for review (template %s).",
+            cx, cy, cw, ch, attempt_summary, template_key,
         )
+        _record_unresolved(labels, cluster, cx, cy, cw, ch, color, attempt_summary)
 
-    logger.info("OCR found %d placeholder(s) in image.", len(matches))
+    if cache_dirty:
+        _save_json_atomic(_cache_path(template_key), cache)
+    if review_dirty:
+        _save_json_atomic(_review_queue_path(template_key), review_queue)
+
+    if cache_hits:
+        logger.info("%d placeholder(s) resolved from learning cache (template %s), no OCR needed.",
+                    cache_hits, template_key)
+
+    unresolved_count = len(review_queue)
+    logger.info(
+        "OCR found %d placeholder(s) in image (%d from cache, %d needing review under %s).",
+        len(matches), cache_hits, unresolved_count, os.path.join(_CACHE_DIR, _safe_filename(template_key)),
+    )
     return matches
