@@ -25,50 +25,30 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Z0-9_]+)\}")
 _LOOSE_KEY_RE = re.compile(r"^[A-Z0-9_]{1,8}$")
 _CHAR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}_"
 
-# Confirmed real placeholder vocabulary (from the app's actual output
-# mappings). Used as a safety-net allow-list whenever the caller doesn't
-# pass output_mapping through. Extended with L1/D1 since those are
-# legitimate keys.
 _DEFAULT_KNOWN_KEYS: Set[str] = {
     "A", "B", "W", "S", "N", "FL", "L", "H", "X", "SL", "ML", "SH", "V", "D", "L1", "D1",
 }
 
-# Detection / clustering tuning
 _SAT_THRESHOLD, _VAL_MIN = 50, 30
-# Black/dark-gray placeholder text (e.g. plain "{L}" style labels, as
-# opposed to the colored dimension labels) has near-zero saturation, so
-# _SAT_THRESHOLD alone never sees it — S = (max-min)/max is ~0 for any
-# grayscale pixel regardless of how dark it is. _DARK_VAL_MAX catches those
-# separately: any sufficiently dark pixel counts as "ink" even with no
-# saturation. Kept well below the near-white background level so faint
-# anti-aliasing/JPEG noise near white doesn't get swept in.
 _DARK_VAL_MAX = 80
 _OPEN_KERNEL_SIZE, _CLOSE_KERNEL_SIZE = 2, 3
-# Thin-line stripping for the dark channel (see _strip_thin_lines). Must be
-# longer than any single glyph's own stroke run (so a "1" or "L" doesn't
-# get eroded away) but shorter than the shortest real dimension-line shaft
-# in these templates, so straight shafts get isolated and removed while
-# character strokes survive untouched.
-_LINE_STRIP_KERNEL_LEN = 22
+_LINE_STRIP_KERNEL_LEN = 70
 _MIN_COMPONENT_AREA = 2
 _MAX_COMPONENT_FRACTION = 0.15
 _MAX_CLUSTER_ASPECT_RATIO = 20.0
 _COLOR_DIST_THRESHOLD = 55.0
-_GAP_HEIGHT_MULTIPLIER, _VERTICAL_ALIGN_FRACTION = 1.6, 0.4      # first-pass clustering
-_RESPLIT_GAP_HEIGHT_MULTIPLIER, _RESPLIT_VERTICAL_ALIGN_FRACTION = 1.2, 0.15  # stricter retry
+_GAP_HEIGHT_MULTIPLIER, _VERTICAL_ALIGN_FRACTION = 1.6, 0.4
+_RESPLIT_GAP_HEIGHT_MULTIPLIER, _RESPLIT_VERTICAL_ALIGN_FRACTION = 1.2, 0.15
 _CHAR_ROW_ALIGN_FRACTION = 0.6
 _OCR_SCALE = 5
 _CANVAS_PAD = 6
-_TIER2_TRUSTED_PSMS = (8, 10)  # single-word/single-char modes trusted for no-brace recovery
-_ARROW_SATELLITE_DILATE_PX = 4  # how close a stray component must be to a flagged arrow/line to be absorbed into it
+_TIER2_TRUSTED_PSMS = (8, 10)
+_ARROW_SATELLITE_DILATE_PX = 4
 
 _DEBUG_DIR = "generated/ocr_debug_clusters"
 _CACHE_DIR = "generated/ocr_cache"
 _SIG_BUCKET_PX, _SIG_BUCKET_COLOR = 8, 16
 
-# Confidence ranking for competing matches of the SAME key when the output
-# mapping says only N of them should exist (see _validate_counts). Lower
-# rank == more trustworthy.
 _SOURCE_RANK = {
     "cache": 0,
     "direct": 1,
@@ -90,10 +70,6 @@ class PlaceholderMatch:
     color: Tuple[int, int, int]
     source: str = "unknown"
 
-
-# --------------------------------------------------------------------------
-# Learning cache
-# --------------------------------------------------------------------------
 
 def _safe_filename(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", key)
@@ -140,9 +116,6 @@ def _save_json(path: str, data: dict) -> None:
 
 
 def apply_correction(tk: str, x: int, y: int, w: int, h: int, color: Tuple[int, int, int], key: str) -> None:
-    """Manually teach the cache the correct key for a cluster OCR couldn't
-    resolve. Every future detect_placeholders() call for this template
-    uses it without touching OCR again."""
     sig = _cluster_signature(x, y, w, h, color)
     cache = _load_json(_cache_path(tk))
     cache[sig] = {"key": key.upper(), "source": "manual", "corrected_at": time.time(), "hits": 0}
@@ -156,36 +129,10 @@ def apply_correction(tk: str, x: int, y: int, w: int, h: int, color: Tuple[int, 
 
 
 def list_unresolved(tk: str) -> Dict[str, dict]:
-    """signature -> {bbox, color, ocr attempts, debug canvas path} for
-    everything still awaiting a manual correction."""
     return _load_json(_review_path(tk))
 
 
-# --------------------------------------------------------------------------
-# Component detection + clustering
-# --------------------------------------------------------------------------
-
 def _strip_thin_lines(mask_u8: np.ndarray) -> np.ndarray:
-    """Remove long, straight horizontal/vertical line segments (dimension
-    shafts) from an ink mask WITHOUT eroding compact glyph strokes.
-
-    A directional morphological opening only lets pixels survive if they
-    belong to an unbroken straight run at least as long as the kernel. Pick
-    the kernel longer than any single glyph's own stroke run (so a "1", an
-    "L"'s vertical, etc. never survive the opening and are therefore never
-    classified as "line") but shorter than the shortest real dimension-line
-    shaft in these templates (so shafts reliably do survive and get
-    isolated). What survives the opening is the line; it's subtracted back
-    out of the original mask, leaving everything else — including short
-    strokes — untouched.
-
-    This exists because plain black/dark dimension-line shafts sitting
-    right next to (or touching) a same-toned placeholder label become ONE
-    connected component at the pixel level before any clustering logic
-    runs. Once fused like that, nothing downstream (resplitting, tier-1/2
-    recovery) can separate them again — this has to happen before
-    connectedComponentsWithStats ever sees the mask.
-    """
     h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (_LINE_STRIP_KERNEL_LEN, 1))
     v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, _LINE_STRIP_KERNEL_LEN))
     h_lines = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, h_kernel)
@@ -195,10 +142,6 @@ def _strip_thin_lines(mask_u8: np.ndarray) -> np.ndarray:
 
 
 def _ink_masks(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Two separate masks: clearly colored (saturated) pixels, and dark
-    (black/gray) pixels regardless of saturation. Kept separate rather than
-    immediately combined because they need different noise handling — see
-    _connected_components."""
     h, s, v = cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
     is_colored = (s > _SAT_THRESHOLD) & (v > _VAL_MIN)
     is_dark = v < _DARK_VAL_MAX
@@ -206,9 +149,6 @@ def _ink_masks(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _colored_mask(image: np.ndarray) -> np.ndarray:
-    """Combined placeholder-ink mask (colored OR dark), for debug
-    visualization only — see _connected_components for why the two
-    channels are treated differently before being combined for real use."""
     is_colored, is_dark = _ink_masks(image)
     return is_colored | is_dark
 
@@ -221,22 +161,6 @@ def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Li
         colored_u8, cv2.MORPH_OPEN, np.ones((_OPEN_KERNEL_SIZE,) * 2, np.uint8)
     )
 
-    # Dark/black text is NOT run through the small square opening used for
-    # the colored channel: that kernel is sized for saturation-threshold
-    # speckle noise, and applying it here would erode genuinely thin glyph
-    # strokes (a digit "1" is often only 1-2px wide) — that was silently
-    # deleting characters outright, e.g. "{L1}" losing its "1" (and often
-    # most of "L") entirely.
-    #
-    # But skipping ALL noise handling on this channel means a plain black
-    # dimension-line shaft that touches a black/dark label fuses into one
-    # connected component with it, with zero separation — that's what was
-    # producing "{L1}"/"{D1}" style labels emitting blank or garbled OCR
-    # ('SEE', 'EE', 'S', 'SC') despite every other key resolving fine: the
-    # line + text were literally one blob before clustering ever started.
-    # _strip_thin_lines targets exactly the shaft (a long straight run)
-    # without touching short glyph strokes, so it's safe where blanket
-    # opening wasn't.
     dark_u8 = _strip_thin_lines(is_dark.astype(np.uint8) * 255)
 
     mask = cv2.bitwise_or(colored_opened, dark_u8)
@@ -284,11 +208,6 @@ def _bbox_overlap(a: dict, b: dict) -> bool:
 
 def _cluster_components(components: List[dict], vertical_align_fraction: float = _VERTICAL_ALIGN_FRACTION,
                          gap_height_multiplier: float = _GAP_HEIGHT_MULTIPLIER) -> List[List[dict]]:
-    """Group same-colored, spatially-close components into one placeholder
-    each. Overlapping/touching same-color bboxes always merge outright;
-    otherwise merge only if vertically aligned and horizontally close,
-    using min(height) as the reference so one oversized component can't
-    inflate tolerance and bridge a different row."""
     n = len(components)
     uf = _UnionFind(n)
     for i in range(n):
@@ -317,8 +236,6 @@ def _cluster_components(components: List[dict], vertical_align_fraction: float =
 
 
 def _resplit_cluster_by_rows(cluster: List[dict]) -> List[List[dict]]:
-    """Retry a cluster that OCR'd as garbage with a much stricter
-    tolerance, in case it geometrically fused two different rows."""
     if len(cluster) < 2:
         return [cluster]
     return _cluster_components(cluster, _RESPLIT_VERTICAL_ALIGN_FRACTION, _RESPLIT_GAP_HEIGHT_MULTIPLIER)
@@ -348,10 +265,6 @@ def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> 
     return kept
 
 
-# --------------------------------------------------------------------------
-# Output-mapping / allow-list validation
-# --------------------------------------------------------------------------
-
 def _normalize_output_mapping(
     output_mapping: Optional[Dict[str, object]]
 ) -> Tuple[Optional[Set[str]], Dict[str, int]]:
@@ -377,8 +290,6 @@ def _normalize_output_mapping(
 
 
 def _is_allowed_key(key: str, allowed_keys: Optional[Set[str]]) -> bool:
-    """If no output mapping is supplied, fall back to the confirmed known
-    placeholder vocabulary rather than allowing anything through."""
     normalized = key.strip().upper()
     effective_keys = allowed_keys if allowed_keys is not None else _DEFAULT_KNOWN_KEYS
     return normalized in effective_keys
@@ -394,11 +305,6 @@ def _component_features(component: dict) -> Tuple[float, float]:
 
 
 def _is_obvious_graphic_component(component: dict) -> bool:
-    """Reject components overwhelmingly likely to be drawing graphics
-    (dimension arrows, leader lines, filled rectangles) rather than text.
-    Conservative on purpose — only very obvious graphics are rejected;
-    arrowheads that slip through here are caught relationally by
-    _mark_arrow_satellites instead."""
     aspect_ratio, fill_ratio = _component_features(component)
     w = int(component["w"])
     h = int(component["h"])
@@ -418,9 +324,6 @@ def _is_obvious_graphic_component(component: dict) -> bool:
 def _mark_arrow_satellites(
     all_components: List[dict], graphic_ids: Set[int], dilate_px: int = _ARROW_SATELLITE_DILATE_PX
 ) -> Set[int]:
-    """Catch arrowheads that _is_obvious_graphic_component misses: small,
-    ~50% filled, roughly square, physically touching an already-flagged
-    same-color shaft/line."""
     graphics = [c for c in all_components if c["label_id"] in graphic_ids]
     if not graphics:
         return set()
@@ -443,8 +346,6 @@ def _mark_arrow_satellites(
 def _validate_counts(
     matches: List[PlaceholderMatch], expected_counts: Dict[str, int]
 ) -> List[PlaceholderMatch]:
-    """Trim excess matches for a key beyond what the output mapping
-    expects, dropping the lowest-confidence ones first (see _SOURCE_RANK)."""
     if not expected_counts:
         return matches
 
@@ -471,15 +372,8 @@ def _validate_counts(
     return keep
 
 
-# --------------------------------------------------------------------------
-# Rendering + OCR
-# --------------------------------------------------------------------------
-
 def _render_cluster_canvas(labels: np.ndarray, cluster: List[dict], pad: int = _CANVAS_PAD
                             ) -> Tuple[Image.Image, int, int]:
-    """Isolate only this cluster's pixels on a white canvas (immune to
-    overlapping neighbours since it's mask-based, not bbox-crop-based),
-    close small gaps in thin strokes, then upscale for OCR."""
     H, W = labels.shape[:2]
     x0, y0, w, h = _cluster_bbox(cluster)
     x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
@@ -599,9 +493,6 @@ def _split_cluster_into_tokens(pil_img: Image.Image, x0: int, y0: int, scale: in
 def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "",
                   allowed_keys: Optional[Set[str]] = None
                   ) -> Tuple[List[PlaceholderMatch], List[Tuple[int, str]]]:
-    """Full pipeline for one cluster: direct OCR -> row-aware split ->
-    merged multi-match -> tier-1 brace-garbled recovery -> tier-2 bare
-    recovery (requires psm 8/10 agreement)."""
     pil_img, x0, y0 = _render_cluster_canvas(labels, cluster)
     if _DEBUG:
         _save_canvas(pil_img, os.path.join(_DEBUG_DIR, f"cluster_{idx:02d}_{x0}_{y0}{'_' + tag if tag else ''}.png"))
@@ -616,7 +507,7 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
     expected_components = 0
     if len(found) == 1:
         key = found[0].group(1).upper()
-        expected_components = len(found[0].group(1)) + 2  # braces + ~1 component/char
+        expected_components = len(found[0].group(1)) + 2
         if _is_allowed_key(key, allowed_keys):
             direct_match = PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color, source="direct")
         else:
@@ -625,11 +516,6 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
                 tag, cx, cy, key
             )
 
-    # A cluster with far more components than its single matched key needs
-    # (braces + ~1/char) likely swallowed a second token. Don't accept the
-    # direct match at face value in that case; verify via row-aware split
-    # first so a silently-dropped placeholder gets a chance to be
-    # recovered instead of just disappearing.
     looks_like_multiple_tokens = direct_match is not None and len(cluster) > expected_components + 2
 
     if direct_match is not None and not looks_like_multiple_tokens:
@@ -722,17 +608,11 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
     return matches, attempts
 
 
-# --------------------------------------------------------------------------
-# Entry point
-# --------------------------------------------------------------------------
-
 def detect_placeholders(
     image: np.ndarray,
     template_key: Optional[str] = None,
     output_mapping: Optional[Dict[str, object]] = None,
 ) -> List[PlaceholderMatch]:
-    """Detect {KEY} placeholders in a rendered template image, using and
-    updating the persistent per-template learning cache."""
     tk = template_key or _template_key_for_image(image)
     allowed_keys, expected_counts = _normalize_output_mapping(output_mapping)
 
