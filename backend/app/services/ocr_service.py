@@ -570,6 +570,8 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
 
     for _, text in attempts:
         loose = _extract_key_loose(text)
+        if loose is None:
+            continue
         loose = loose.upper()
         if _is_allowed_key(loose, allowed_keys):
             matches.append(
