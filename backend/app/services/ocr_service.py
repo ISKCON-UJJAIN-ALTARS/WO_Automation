@@ -349,8 +349,14 @@ def _is_obvious_graphic_component(component: dict) -> bool:
     if w >= 15 and h >= 15 and fill_ratio <= 0.12:
         return True
 
-    # Large solid regions are normally filled drawing shapes rather than text.
-    if w >= 12 and h >= 8 and fill_ratio >= 0.70:
+    # Large solid regions are normally filled drawing shapes rather than
+    # text. Genuine filled rectangles (the pillar boxes) measure a clean
+    # 1.000 fill ratio; bold glyphs with closed loops (e.g. 'B', '8', '0')
+    # can legitimately reach ~0.7-0.8 ink coverage in their own tight bbox,
+    # so the threshold sits well above that to avoid misclassifying bold
+    # text as a filled shape (which was swallowing real placeholder
+    # letters, e.g. a 'B' at fill=0.706 was being dropped entirely).
+    if w >= 12 and h >= 8 and fill_ratio >= 0.92:
         return True
 
     return False
