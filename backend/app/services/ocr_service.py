@@ -511,13 +511,16 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
         if not _is_allowed_key(key, allowed_keys):
             logger.info(
                 "%sCluster at (%d,%d): rejected OCR key {%s}; "
-                "not present in current output mappings.",
+                "not present in current output mappings — trying recovery.",
                 tag, cx, cy, key
             )
+            # Fall through to split/merged/tier-1/tier-2 recovery below
+            # instead of giving up immediately: a rejected direct read
+            # (e.g. Tesseract confusing 'S' for '8') still deserves a
+            # second chance from the other passes in `attempts`.
+        else:
+            matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color))
             return matches, attempts
-
-        matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color))
-        return matches, attempts
 
     split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
     if split:
@@ -589,6 +592,29 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
             "%sCluster at (%d,%d): rejected tier-1 recovery {%s}; "
             "not present in current output mappings.",
             tag, cx, cy, loose
+        )
+
+    for psm, text in attempts:
+        bare = _extract_key_bare(psm, text)
+        if bare is None:
+            continue
+        bare = bare.upper()
+        if _is_allowed_key(bare, allowed_keys):
+            matches.append(
+                PlaceholderMatch(
+                    "{" + bare + "}", bare, cx, cy, cw, ch, color
+                )
+            )
+            logger.info(
+                "%sCluster at (%d,%d): tier-2 bare recovery '%s' (psm%d) -> {%s}",
+                tag, cx, cy, text, psm, bare
+            )
+            return matches, attempts
+
+        logger.info(
+            "%sCluster at (%d,%d): rejected tier-2 recovery {%s}; "
+            "not present in current output mappings.",
+            tag, cx, cy, bare
         )
 
     # IMPORTANT: Do not use bare OCR as an automatic placeholder detector.
