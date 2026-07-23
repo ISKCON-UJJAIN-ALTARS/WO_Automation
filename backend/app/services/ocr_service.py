@@ -339,7 +339,7 @@ def _validate_matches(
     valid = []
 
     for match in matches:
-        key = match.key.upper()
+        key = str(match.key or "").strip().upper()
         if not _is_allowed_key(key, allowed_keys):
             logger.info(
                 "%sRejected OCR candidate {%s}: key is not present in current "
