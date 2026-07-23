@@ -28,9 +28,7 @@ _CHAR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}_"
 # Confirmed real placeholder vocabulary (from the app's actual output
 # mappings). Used as a safety-net allow-list whenever the caller doesn't
 # pass output_mapping through. Extended with L1/D1 since those are
-# legitimate keys that were previously missing entirely from detection
-# (see _colored_mask/_dark_mask below) — they'd have been rejected by this
-# allow-list even if OCR had somehow found them.
+# legitimate keys.
 _DEFAULT_KNOWN_KEYS: Set[str] = {
     "A", "B", "W", "S", "N", "FL", "L", "H", "X", "SL", "ML", "SH", "V", "D", "L1", "D1",
 }
@@ -42,11 +40,16 @@ _SAT_THRESHOLD, _VAL_MIN = 50, 30
 # _SAT_THRESHOLD alone never sees it — S = (max-min)/max is ~0 for any
 # grayscale pixel regardless of how dark it is. _DARK_VAL_MAX catches those
 # separately: any sufficiently dark pixel counts as "ink" even with no
-# saturation, which is what black text against a white background looks
-# like. Kept well below the near-white background level so faint
+# saturation. Kept well below the near-white background level so faint
 # anti-aliasing/JPEG noise near white doesn't get swept in.
 _DARK_VAL_MAX = 80
 _OPEN_KERNEL_SIZE, _CLOSE_KERNEL_SIZE = 2, 3
+# Thin-line stripping for the dark channel (see _strip_thin_lines). Must be
+# longer than any single glyph's own stroke run (so a "1" or "L" doesn't
+# get eroded away) but shorter than the shortest real dimension-line shaft
+# in these templates, so straight shafts get isolated and removed while
+# character strokes survive untouched.
+_LINE_STRIP_KERNEL_LEN = 22
 _MIN_COMPONENT_AREA = 2
 _MAX_COMPONENT_FRACTION = 0.15
 _MAX_CLUSTER_ASPECT_RATIO = 20.0
@@ -162,6 +165,35 @@ def list_unresolved(tk: str) -> Dict[str, dict]:
 # Component detection + clustering
 # --------------------------------------------------------------------------
 
+def _strip_thin_lines(mask_u8: np.ndarray) -> np.ndarray:
+    """Remove long, straight horizontal/vertical line segments (dimension
+    shafts) from an ink mask WITHOUT eroding compact glyph strokes.
+
+    A directional morphological opening only lets pixels survive if they
+    belong to an unbroken straight run at least as long as the kernel. Pick
+    the kernel longer than any single glyph's own stroke run (so a "1", an
+    "L"'s vertical, etc. never survive the opening and are therefore never
+    classified as "line") but shorter than the shortest real dimension-line
+    shaft in these templates (so shafts reliably do survive and get
+    isolated). What survives the opening is the line; it's subtracted back
+    out of the original mask, leaving everything else — including short
+    strokes — untouched.
+
+    This exists because plain black/dark dimension-line shafts sitting
+    right next to (or touching) a same-toned placeholder label become ONE
+    connected component at the pixel level before any clustering logic
+    runs. Once fused like that, nothing downstream (resplitting, tier-1/2
+    recovery) can separate them again — this has to happen before
+    connectedComponentsWithStats ever sees the mask.
+    """
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (_LINE_STRIP_KERNEL_LEN, 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, _LINE_STRIP_KERNEL_LEN))
+    h_lines = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, h_kernel)
+    v_lines = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, v_kernel)
+    lines = cv2.bitwise_or(h_lines, v_lines)
+    return cv2.subtract(mask_u8, lines)
+
+
 def _ink_masks(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Two separate masks: clearly colored (saturated) pixels, and dark
     (black/gray) pixels regardless of saturation. Kept separate rather than
@@ -176,7 +208,7 @@ def _ink_masks(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 def _colored_mask(image: np.ndarray) -> np.ndarray:
     """Combined placeholder-ink mask (colored OR dark), for debug
     visualization only — see _connected_components for why the two
-    channels are opened separately before being combined for real use."""
+    channels are treated differently before being combined for real use."""
     is_colored, is_dark = _ink_masks(image)
     return is_colored | is_dark
 
@@ -188,15 +220,24 @@ def _connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Li
     colored_opened = cv2.morphologyEx(
         colored_u8, cv2.MORPH_OPEN, np.ones((_OPEN_KERNEL_SIZE,) * 2, np.uint8)
     )
-    # Dark/black text is NOT opened: opening erodes anything thinner than
-    # the kernel, and thin glyphs (a digit "1", the vertical stroke of an
-    # "I") are often only 1-2px wide — the opening step was silently
-    # deleting them outright, e.g. "{L1}" losing its "1" (and often most of
-    # "L") entirely, leaving only a lone "}" for OCR to find. Colored
-    # pixels still need it to clean up saturation-threshold noise; black
-    # text doesn't have that noise source, and the existing area/aspect
-    # filters below still catch genuine junk (e.g. border lines).
-    dark_u8 = is_dark.astype(np.uint8) * 255
+
+    # Dark/black text is NOT run through the small square opening used for
+    # the colored channel: that kernel is sized for saturation-threshold
+    # speckle noise, and applying it here would erode genuinely thin glyph
+    # strokes (a digit "1" is often only 1-2px wide) — that was silently
+    # deleting characters outright, e.g. "{L1}" losing its "1" (and often
+    # most of "L") entirely.
+    #
+    # But skipping ALL noise handling on this channel means a plain black
+    # dimension-line shaft that touches a black/dark label fuses into one
+    # connected component with it, with zero separation — that's what was
+    # producing "{L1}"/"{D1}" style labels emitting blank or garbled OCR
+    # ('SEE', 'EE', 'S', 'SC') despite every other key resolving fine: the
+    # line + text were literally one blob before clustering ever started.
+    # _strip_thin_lines targets exactly the shaft (a long straight run)
+    # without touching short glyph strokes, so it's safe where blanket
+    # opening wasn't.
+    dark_u8 = _strip_thin_lines(is_dark.astype(np.uint8) * 255)
 
     mask = cv2.bitwise_or(colored_opened, dark_u8)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -585,13 +626,10 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
             )
 
     # A cluster with far more components than its single matched key needs
-    # (braces + ~1/char) likely swallowed a second token — e.g. two
-    # placeholders on the same line merged across a separator character
-    # that OCR forced into something confusable, breaking the OTHER
-    # token's brace pairing while this one still read cleanly. Don't
-    # accept the direct match at face value in that case; verify via
-    # row-aware split first so a silently-dropped placeholder gets a
-    # chance to be recovered instead of just disappearing.
+    # (braces + ~1/char) likely swallowed a second token. Don't accept the
+    # direct match at face value in that case; verify via row-aware split
+    # first so a silently-dropped placeholder gets a chance to be
+    # recovered instead of just disappearing.
     looks_like_multiple_tokens = direct_match is not None and len(cluster) > expected_components + 2
 
     if direct_match is not None and not looks_like_multiple_tokens:
@@ -614,8 +652,6 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
                 continue
             matches.append(PlaceholderMatch("{" + key + "}", key, sx, sy, sw, sh, color, source="split"))
         if direct_match is not None and not any(m.key == direct_match.key for m in matches):
-            # Split didn't reproduce the direct match — keep it too rather
-            # than assume split is strictly better; it isn't guaranteed to.
             matches.append(direct_match)
         if matches:
             logger.info("%sCluster at (%d,%d): split into %d valid token(s) (raw='%s')",
@@ -623,8 +659,6 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
             return matches, attempts
 
     if direct_match is not None:
-        # Split found nothing extra (or nothing at all) — the direct read
-        # stands.
         matches.append(direct_match)
         return matches, attempts
 
