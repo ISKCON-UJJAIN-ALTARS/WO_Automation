@@ -25,6 +25,20 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Z0-9_]+)\}")
 _LOOSE_KEY_RE = re.compile(r"^[A-Z0-9_]{1,8}$")
 _CHAR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}_"
 
+# Confirmed real placeholder vocabulary (from the app's actual output
+# mappings). Used as a safety-net allow-list whenever the caller doesn't
+# pass output_mapping through (which is currently always, in production).
+# Without this, allowed_keys stays None and _is_allowed_key accepts any
+# syntactically valid string — which is exactly how arrow/dimension-line
+# OCR noise (misreads like 'J', 'SE', 'DE', 'SEE', 'EE', 'Q', 'Y', '1'...)
+# was slipping through as if it were a genuine placeholder on every
+# template, silently erasing the underlying artwork with nothing to
+# replace it. This is a stopgap: the correct long-term fix is still for
+# the caller to pass the real output_mapping into detect_placeholders().
+_DEFAULT_KNOWN_KEYS: Set[str] = {
+    "A", "B", "W", "S", "N", "FL", "L", "H", "X", "SL", "ML", "SH", "V", "D",
+}
+
 # Detection / clustering tuning
 _SAT_THRESHOLD, _VAL_MIN = 50, 30
 _OPEN_KERNEL_SIZE, _CLOSE_KERNEL_SIZE = 2, 3
@@ -288,11 +302,13 @@ def _normalize_output_mapping(
 def _is_allowed_key(key: str, allowed_keys: Optional[Set[str]]) -> bool:
     """Return True when key is valid for this generation request.
 
-    If no output mapping is supplied, preserve backwards compatibility and
-    allow all syntactically valid keys.
+    If no output mapping is supplied, fall back to the confirmed known
+    placeholder vocabulary rather than allowing anything through — see
+    the note on _DEFAULT_KNOWN_KEYS for why "no restriction" is unsafe.
     """
     normalized = key.strip().upper()
-    return allowed_keys is None or normalized in allowed_keys
+    effective_keys = allowed_keys if allowed_keys is not None else _DEFAULT_KNOWN_KEYS
+    return normalized in effective_keys
 
 
 def _component_features(component: dict) -> Tuple[float, float]:
@@ -321,6 +337,16 @@ def _is_obvious_graphic_component(component: dict) -> bool:
 
     # Long, thin strokes are normally dimension lines/arrows.
     if aspect_ratio >= 12.0:
+        return True
+
+    # Curved dimension-leader arrows aren't straight, so their bounding-box
+    # aspect ratio can look modest even though the stroke itself is thin.
+    # A genuine glyph always inks a meaningful fraction of its own bbox; a
+    # curvy line spread across a box this size does not. Without this,
+    # curved arrows slip through, then either fuse with an adjacent
+    # placeholder's text component during clustering (contaminating it) or
+    # get OCR-misread as a stray bare letter by tier-2 recovery.
+    if w >= 15 and h >= 15 and fill_ratio <= 0.12:
         return True
 
     # Large solid regions are normally filled drawing shapes rather than text.
@@ -594,7 +620,17 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
             tag, cx, cy, loose
         )
 
-    for psm, text in attempts:
+    cluster_area = sum(int(c.get("area", 0)) for c in cluster)
+    cluster_fill = cluster_area / float(max(cw * ch, 1))
+    tier2_shape_ok = not (cw >= 15 and ch >= 15 and cluster_fill <= 0.12)
+    if not tier2_shape_ok:
+        logger.info(
+            "%sCluster at (%d,%d): skipping tier-2 bare recovery — shape %dx%d "
+            "(fill %.2f) looks like a line/arrow, not text.",
+            tag, cx, cy, cw, ch, cluster_fill
+        )
+
+    for psm, text in (attempts if tier2_shape_ok else []):
         bare = _extract_key_bare(psm, text)
         if bare is None:
             continue
