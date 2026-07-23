@@ -6,7 +6,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -253,6 +253,110 @@ def _filter_clusters(clusters: List[List[dict]], img_shape: Tuple[int, int]) -> 
 # Rendering + OCR
 # --------------------------------------------------------------------------
 
+def _normalize_output_mapping(
+    output_mapping: Optional[Dict[str, object]]
+) -> Tuple[Optional[Set[str]], Dict[str, int]]:
+    """Normalize the output mapping supplied by the generation workflow.
+
+    The OCR service should only accept placeholder keys that are actually
+    present in the current output mapping. Values are treated as expected
+    occurrence counts when they can be converted to non-negative integers.
+    """
+    if not output_mapping:
+        return None, {}
+
+    allowed_keys: Set[str] = set()
+    expected_counts: Dict[str, int] = {}
+
+    for raw_key, raw_count in output_mapping.items():
+        key = str(raw_key).strip().upper()
+        if not _LOOSE_KEY_RE.match(key):
+            continue
+
+        allowed_keys.add(key)
+
+        try:
+            count = int(raw_count)
+            if count >= 0:
+                expected_counts[key] = count
+        except (TypeError, ValueError):
+            pass
+
+    return allowed_keys, expected_counts
+
+
+def _is_allowed_key(key: str, allowed_keys: Optional[Set[str]]) -> bool:
+    """Return True when key is valid for this generation request.
+
+    If no output mapping is supplied, preserve backwards compatibility and
+    allow all syntactically valid keys.
+    """
+    normalized = key.strip().upper()
+    return allowed_keys is None or normalized in allowed_keys
+
+
+def _component_features(component: dict) -> Tuple[float, float]:
+    """Return aspect ratio and fill ratio for a connected component."""
+    w = max(int(component["w"]), 1)
+    h = max(int(component["h"]), 1)
+    area = max(int(component["area"]), 0)
+    aspect_ratio = max(w, h) / max(min(w, h), 1)
+    fill_ratio = area / float(w * h)
+    return aspect_ratio, fill_ratio
+
+
+def _is_obvious_graphic_component(component: dict) -> bool:
+    """Reject components that are overwhelmingly likely to be drawing graphics.
+
+    Templates contain blue dimension arrows, long measurement lines and filled
+    blue rectangles in addition to blue placeholder text. These components
+    should not enter the OCR clustering pipeline.
+
+    The thresholds are intentionally conservative: only very obvious graphics
+    are rejected here. Text-like components remain available for OCR.
+    """
+    aspect_ratio, fill_ratio = _component_features(component)
+    w = int(component["w"])
+    h = int(component["h"])
+
+    # Long, thin strokes are normally dimension lines/arrows.
+    if aspect_ratio >= 12.0:
+        return True
+
+    # Large solid regions are normally filled drawing shapes rather than text.
+    if w >= 12 and h >= 8 and fill_ratio >= 0.70:
+        return True
+
+    return False
+
+
+def _validate_matches(
+    matches: List["PlaceholderMatch"],
+    allowed_keys: Optional[Set[str]],
+    tag: str = "",
+) -> List["PlaceholderMatch"]:
+    """Keep only matches whose keys are valid for this generation request."""
+    valid = []
+
+    for match in matches:
+        key = match.key.upper()
+        if not _is_allowed_key(key, allowed_keys):
+            logger.info(
+                "%sRejected OCR candidate {%s}: key is not present in current "
+                "output mappings.",
+                tag,
+                key,
+            )
+            continue
+
+        match.key = key
+        match.token = "{" + key + "}"
+        valid.append(match)
+
+    return valid
+
+
+
 def _render_cluster_canvas(labels: np.ndarray, cluster: List[dict], pad: int = _CANVAS_PAD
                             ) -> Tuple[Image.Image, int, int]:
     """Isolate only this cluster's pixels on a white canvas (immune to
@@ -387,7 +491,8 @@ def _split_cluster_into_tokens(pil_img: Image.Image, x0: int, y0: int, scale: in
     return results
 
 
-def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = ""
+def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "",
+                  allowed_keys: Optional[Set[str]] = None
                   ) -> Tuple[List[PlaceholderMatch], List[Tuple[int, str]]]:
     """Full pipeline for one cluster: flat OCR -> row-aware split ->
     brace-garbled recovery -> no-brace recovery."""
@@ -402,39 +507,92 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
     matches: List[PlaceholderMatch] = []
 
     if len(found) == 1:
-        key = found[0].group(1)
+        key = found[0].group(1).upper()
+        if not _is_allowed_key(key, allowed_keys):
+            logger.info(
+                "%sCluster at (%d,%d): rejected OCR key {%s}; "
+                "not present in current output mappings.",
+                tag, cx, cy, key
+            )
+            return matches, attempts
+
         matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color))
         return matches, attempts
 
     split = _split_cluster_into_tokens(pil_img, x0, y0, _OCR_SCALE)
     if split:
         for key, sx, sy, sw, sh in split:
-            matches.append(PlaceholderMatch("{" + key + "}", key, sx, sy, sw, sh, color))
-        logger.info("%sCluster at (%d,%d): split into %d token(s) (raw='%s')", tag, cx, cy, len(split), raw_text)
-        return matches, attempts
+            key = key.upper()
+            if not _is_allowed_key(key, allowed_keys):
+                logger.info(
+                    "%sCluster at (%d,%d): rejected split OCR key {%s}; "
+                    "not present in current output mappings.",
+                    tag, cx, cy, key
+                )
+                continue
+
+            matches.append(
+                PlaceholderMatch(
+                    "{" + key + "}", key, sx, sy, sw, sh, color
+                )
+            )
+
+        if matches:
+            logger.info(
+                "%sCluster at (%d,%d): split into %d valid token(s) (raw='%s')",
+                tag, cx, cy, len(matches), raw_text
+            )
+            return matches, attempts
 
     if len(found) > 1:
         for m in found:
-            key = m.group(1)
-            matches.append(PlaceholderMatch("{" + key + "}", key, cx, cy, cw, ch, color))
-        logger.warning("%sCluster at (%d,%d): couldn't split '%s', kept merged.", tag, cx, cy, raw_text)
-        return matches, attempts
+            key = m.group(1).upper()
+            if not _is_allowed_key(key, allowed_keys):
+                logger.info(
+                    "%sCluster at (%d,%d): rejected merged OCR key {%s}; "
+                    "not present in current output mappings.",
+                    tag, cx, cy, key
+                )
+                continue
+
+            matches.append(
+                PlaceholderMatch(
+                    "{" + key + "}", key, cx, cy, cw, ch, color
+                )
+            )
+
+        if matches:
+            logger.warning(
+                "%sCluster at (%d,%d): couldn't split '%s', kept valid matches.",
+                tag, cx, cy, raw_text
+            )
+            return matches, attempts
 
     for _, text in attempts:
         loose = _extract_key_loose(text)
-        if loose:
-            matches.append(PlaceholderMatch("{" + loose + "}", loose, cx, cy, cw, ch, color))
-            logger.info("%sCluster at (%d,%d): tier-1 recovery '%s' -> {%s}", tag, cx, cy, text, loose)
+        loose = loose.upper()
+        if _is_allowed_key(loose, allowed_keys):
+            matches.append(
+                PlaceholderMatch(
+                    "{" + loose + "}", loose, cx, cy, cw, ch, color
+                )
+            )
+            logger.info(
+                "%sCluster at (%d,%d): tier-1 recovery '%s' -> {%s}",
+                tag, cx, cy, text, loose
+            )
             return matches, attempts
 
-    for psm, text in attempts:
-        bare = _extract_key_bare(psm, text)
-        if bare:
-            matches.append(PlaceholderMatch("{" + bare + "}", bare, cx, cy, cw, ch, color))
-            logger.info("%sCluster at (%d,%d): tier-2 recovery psm%d='%s' -> {%s} [low confidence]",
-                        tag, cx, cy, psm, text, bare)
-            return matches, attempts
+        logger.info(
+            "%sCluster at (%d,%d): rejected tier-1 recovery {%s}; "
+            "not present in current output mappings.",
+            tag, cx, cy, loose
+        )
 
+    # IMPORTANT: Do not use bare OCR as an automatic placeholder detector.
+    # Without brace evidence, arrows, dimension labels, line fragments and
+    # other graphics frequently become false positives such as {1}, {T},
+    # {HIM}, {CE}, {8} and {J}. Such candidates are sent to review instead.
     return matches, attempts
 
 
@@ -442,17 +600,47 @@ def _ocr_cluster(labels: np.ndarray, cluster: List[dict], idx: int, tag: str = "
 # Entry point
 # --------------------------------------------------------------------------
 
-def detect_placeholders(image: np.ndarray, template_key: Optional[str] = None) -> List[PlaceholderMatch]:
+def detect_placeholders(
+    image: np.ndarray,
+    template_key: Optional[str] = None,
+    output_mapping: Optional[Dict[str, object]] = None,
+) -> List[PlaceholderMatch]:
     """Detect {KEY} placeholders in a rendered template image, using and
     updating the persistent per-template learning cache. template_key
     defaults to a hash of the image bytes, so repeat renders of the same
     template automatically reuse everything already learned about it."""
     tk = template_key or _template_key_for_image(image)
+    allowed_keys, expected_counts = _normalize_output_mapping(output_mapping)
+
+    if allowed_keys is not None:
+        logger.info(
+            "OCR constrained to %d placeholder key(s) from output mappings: %s",
+            len(allowed_keys),
+            ", ".join(sorted(allowed_keys)),
+        )
+        if expected_counts:
+            logger.info(
+                "Expected placeholder counts: %s",
+                expected_counts,
+            )
+
     cache = _load_json(_cache_path(tk))
     review = _load_json(_review_path(tk))
     cache_dirty = review_dirty = False
 
     labels, keep_mask, components = _connected_components(image)
+
+    # Keep the original label image intact, but exclude obvious drawing
+    # graphics from OCR candidate clustering.
+    graphic_components = [c for c in components if _is_obvious_graphic_component(c)]
+    components = [c for c in components if not _is_obvious_graphic_component(c)]
+
+    if graphic_components:
+        logger.info(
+            "Filtered %d obvious graphic component(s) before OCR clustering.",
+            len(graphic_components),
+        )
+
     if _DEBUG:
         debug_mask = np.full_like(image, 255)
         debug_mask[keep_mask] = (0, 0, 0)
@@ -482,13 +670,32 @@ def detect_placeholders(image: np.ndarray, template_key: Optional[str] = None) -
 
         cached = cache.get(sig)
         if cached:
-            cached["hits"] = cached.get("hits", 0) + 1
-            cache_dirty = True
-            matches.append(PlaceholderMatch("{" + cached["key"] + "}", cached["key"], cx, cy, cw, ch, color))
-            cache_hits += 1
-            continue
+            cached_key = str(cached.get("key", "")).upper()
 
-        cluster_matches, attempts = _ocr_cluster(labels, cluster, idx)
+            # Never reuse a cached result that is impossible for the current
+            # output mapping. This also protects against stale/wrong OCR cache
+            # entries from an earlier version of the detector.
+            if not _is_allowed_key(cached_key, allowed_keys):
+                logger.info(
+                    "Ignoring cached key {%s} at (%d,%d): not present in "
+                    "current output mappings.",
+                    cached_key, cx, cy
+                )
+                cached = None
+            else:
+                cached["hits"] = cached.get("hits", 0) + 1
+                cache_dirty = True
+                matches.append(
+                    PlaceholderMatch(
+                        "{" + cached_key + "}",
+                        cached_key,
+                        cx, cy, cw, ch, color
+                    )
+                )
+                cache_hits += 1
+                continue
+
+        cluster_matches, attempts = _ocr_cluster(labels, cluster, idx, allowed_keys=allowed_keys)
         if cluster_matches:
             matches.extend(cluster_matches)
             if len(cluster_matches) == 1:
@@ -501,7 +708,7 @@ def detect_placeholders(image: np.ndarray, template_key: Optional[str] = None) -
                         cx, cy, cw, ch, len(subclusters))
             resplit_matches, resolved_n = [], 0
             for si, sub in enumerate(subclusters):
-                sub_matches, _ = _ocr_cluster(labels, sub, idx, tag=f"[resplit {si}] ")
+                sub_matches, _ = _ocr_cluster(labels, sub, idx, tag=f"[resplit {si}] ", allowed_keys=allowed_keys)
                 if sub_matches:
                     resolved_n += 1
                     resplit_matches.extend(sub_matches)
